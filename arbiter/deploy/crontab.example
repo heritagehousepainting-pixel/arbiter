@@ -1,0 +1,15 @@
+# Arbiter daily scheduled run — cron alternative to com.arbiter.daily.plist
+#
+# Schedule: 18:30 local time Mon-Fri. Machine timezone is America/New_York.
+# Adjust minute/hour if machine is UTC: 18:30 ET = 23:30 UTC (22:30 in EDT).
+#
+# Usage:
+#   crontab -e
+#   (paste the line below)
+#
+# IMPORTANT: ensure data/ exists before the first run.
+#   mkdir -p /Users/jonathanmorris/poly_bot/arbiter/data
+#
+# Fields: minute hour dom month dow command
+#
+30 18 * * 1-5 cd /Users/jonathanmorris/poly_bot/arbiter && /Users/jonathanmorris/poly_bot/arbiter/.venv/bin/python -m arbiter.cli run >> data/arbiter-daily.stdout.log 2>> data/arbiter-daily.stderr.log

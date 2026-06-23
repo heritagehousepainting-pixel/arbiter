@@ -1,0 +1,51 @@
+# Arbiter default configuration
+# All values can be overridden via environment variables.
+# STRICT parse: unknown keys will raise an error on load.
+
+[core]
+live_trading = false
+# executor_backend selects the broker object: "sim" (in-memory) or
+# "alpaca_paper" (real Alpaca paper endpoint, requires both Alpaca keys).
+# Overridable via EXECUTOR_BACKEND. live_trading stays false in both modes.
+executor_backend = "sim"
+
+[sizing]
+# Hard caps per INTERFACES.md §9
+max_position_pct = 0.05          # 5% per name
+max_sector_pct   = 0.20          # 20% per sector
+max_gross_pct    = 0.80          # 80% gross exposure
+max_open_positions = 20
+adv_cap_pct      = 0.02          # 2% of 20-day ADV
+
+[storage]
+db_path    = "data/arbiter.db"
+audit_path = "data/audit.jsonl"
+metrics_path = "data/metrics.jsonl"
+
+[alpaca]
+api_key    = ""
+secret_key = ""
+paper_base_url = "https://paper-api.alpaca.markets"
+data_base_url  = "https://data.alpaca.markets"
+timeout    = 20.0
+
+[edgar]
+user_agent = ""
+
+[alerting]
+kill_switch_url  = ""
+alert_webhook_url = ""
+
+[daemon]
+# Market-hours intraday runtime loop (sub-project #3).
+# fast_interval_s: seconds between cheap fast iterations (reconcile + stop checks)
+#   while the market is open. Default 180s (3 min). Lower cautiously (API limits).
+#   Overridable via ARBITER_FAST_INTERVAL_S.
+fast_interval_s = 180.0
+# full_cycle_times_et: comma-separated ET times to run the slow FULL cycle
+#   (ingest + entries + reversal). Entries stay disclosure-cadence (NOT day-trading).
+#   Overridable via ARBITER_FULL_CYCLE_TIMES_ET.
+full_cycle_times_et = "09:45,15:30"
+# heartbeat_path: liveness file rewritten atomically each iteration.
+#   Overridable via ARBITER_DAEMON_HEARTBEAT_PATH.
+heartbeat_path = "data/arbiter-daemon.heartbeat"

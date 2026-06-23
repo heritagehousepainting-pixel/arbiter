@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<edgarSubmission>
+  <documentType>SC 13G</documentType>
+  <filingDate>2026-02-14</filingDate>
+  <dateOfEvent>2026-02-10</dateOfEvent>
+  <subjectCompany>
+    <companyName>Apple Inc.</companyName>
+    <cik>0000320193</cik>
+  </subjectCompany>
+  <reportingPerson>
+    <rptOwnerCik>0006666666</rptOwnerCik>
+    <rptOwnerName>Passive Index Fund</rptOwnerName>
+  </reportingPerson>
+  <cusip>037833100</cusip>
+  <percentOfClass>6.2</percentOfClass>
+  <aggregateAmountOwned>950000</aggregateAmountOwned>
+</edgarSubmission>

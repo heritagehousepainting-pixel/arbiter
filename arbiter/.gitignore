@@ -1,0 +1,36 @@
+# Local secrets and environment
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+node_modules/
+
+# Runtime state and generated market/trading data
+# NOTE: anchored to the repo-root runtime dir only — must NOT match the
+# arbiter/data/ CODE package (clock.py, pit.py, fund_managers.py, ...).
+/data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.jsonl
+*.log
+*.pid
+
+# Python build/test artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.tsbuildinfo
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/

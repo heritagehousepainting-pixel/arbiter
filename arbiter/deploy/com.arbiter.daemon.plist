@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Label must match the filename (without .plist). -->
+    <key>Label</key>
+    <string>com.arbiter.daemon</string>
+
+    <!--
+        Market-hours intraday runtime daemon (sub-project #3).
+
+        A LONG-RUNNING process: launchd starts it once and restarts it if it dies
+        (KeepAlive=true). Internally it loops while the US market is open (running
+        cheap fast iterations + scheduled full cycles) and long-sleeps while
+        closed. SIGTERM (launchctl bootout) stops it gracefully.
+
+        config.py loads .env itself (setdefault semantics — real env vars win), so
+        no EnvironmentVariables key is needed. EXECUTOR_BACKEND=alpaca_paper must
+        be set for the live current-price + Alpaca calendar paths to engage.
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jonathanmorris/poly_bot/arbiter/.venv/bin/python</string>
+        <string>-m</string>
+        <string>arbiter.cli</string>
+        <string>daemon</string>
+    </array>
+
+    <!--
+        Logs land in data/ next to the database.
+        IMPORTANT: data/ must exist before loading this plist (launchd will NOT
+        create missing directories). scripts/schedule.sh install-daemon mkdir -p's it.
+    -->
+    <key>StandardOutPath</key>
+    <string>/Users/jonathanmorris/poly_bot/arbiter/data/arbiter-daemon.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jonathanmorris/poly_bot/arbiter/data/arbiter-daemon.stderr.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jonathanmorris/poly_bot/arbiter</string>
+
+    <!-- Canonical long-running-agent pattern: start at load, relaunch on crash. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Throttle relaunches so a crash-loop does not hammer the broker API. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+</dict>
+</plist>

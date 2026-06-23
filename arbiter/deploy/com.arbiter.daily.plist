@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Label must match the filename (without .plist). -->
+    <key>Label</key>
+    <string>com.arbiter.daily</string>
+
+    <!--
+        ProgramArguments: absolute venv python + module invocation.
+        No PATH or EnvironmentVariables key needed — config.py loads .env
+        itself using setdefault semantics (real env vars always win).
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jonathanmorris/poly_bot/arbiter/.venv/bin/python</string>
+        <string>-m</string>
+        <string>arbiter.cli</string>
+        <string>run</string>
+    </array>
+
+    <!--
+        Schedule: 18:30 local time, Monday–Friday (Weekday 1–5).
+        launchd uses the MACHINE LOCAL TIMEZONE — this machine is America/New_York.
+        18:30 ET = ~3 hours after market close; EDGAR Form 4 filings and
+        Alpaca end-of-day prices are typically available by this time.
+
+        To change the timezone assumption: adjust Hour/Minute to the equivalent
+        UTC offset for your local close, or run the machine under a fixed TZ.
+
+        This is a ONE-SHOT trigger — launchd starts the process, it runs
+        ingest + one decision cycle, then exits.  KeepAlive is false.
+        launchd will NOT fire a second instance if the previous one is still
+        running (UserAgent queue serialization).
+
+        C6 (sub-project #3): with the market-hours daemon (com.arbiter.daemon)
+        installed, THIS 18:30 one-shot is downgraded to a flock-guarded "daemon
+        was down" fallback.  arbiter run acquires data/arbiter-daemon.pid; if the
+        daemon already holds it, the one-shot no-ops cleanly so two processes
+        never mutate the same SQLite DB.  The DAEMON owns the post-close sweep +
+        final reconcile at the open->closed transition.  Keep this one-shot
+        installed as the idempotent backstop for days the daemon was down.
+    -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>18</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>18</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>18</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>18</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>18</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+    </array>
+
+    <!--
+        Logs land in data/ next to the database.
+        IMPORTANT: data/ must exist before loading this plist.
+        launchd will NOT create missing directories.
+        Run: mkdir -p /Users/jonathanmorris/poly_bot/arbiter/data
+    -->
+    <key>StandardOutPath</key>
+    <string>/Users/jonathanmorris/poly_bot/arbiter/data/arbiter-daily.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jonathanmorris/poly_bot/arbiter/data/arbiter-daily.stderr.log</string>
+
+    <!-- WorkingDirectory ensures relative paths in config/ and data/ resolve. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/jonathanmorris/poly_bot/arbiter</string>
+
+    <!-- Not a daemon — fire once, then exit. -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

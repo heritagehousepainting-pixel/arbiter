@@ -1,0 +1,51 @@
+# ============================================================================
+# Monorepo .gitignore  (arbiter + cockpit + docs)
+# Generated/secret files are excluded BY EXTENSION/dir, never by a bare `data/`
+# rule (that previously swallowed the arbiter/arbiter/data code package).
+# ============================================================================
+
+# --- Secrets: never commit ---
+**/.env
+**/.env.*
+!**/.env.example
+
+# --- Heavy / generated dirs ---
+**/.venv/
+**/venv/
+**/node_modules/
+**/__pycache__/
+**/.pytest_cache/
+**/*.egg-info/
+**/dist/
+**/.vite/
+**/htmlcov/
+.coverage
+*.py[cod]
+*.pyo
+*.tsbuildinfo
+
+# --- Runtime data / generated (by extension, NOT by directory) ---
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.jsonl
+*.log
+*.pid
+
+# --- OS / editor noise ---
+.DS_Store
+.idea/
+.vscode/
+
+# --- Other workspace projects NOT part of this monorepo ---
+/mirofish/
+/polybot/
+/stockbot/
+/stockbot-pead/
+/stockbot-ui/
+
+# --- Loose workspace artifacts at root ---
+/*.png
+/*.jpeg
+/*.jpg

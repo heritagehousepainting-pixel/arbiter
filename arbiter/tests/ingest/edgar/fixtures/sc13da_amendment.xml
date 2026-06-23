@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<edgarSubmission>
+  <documentType>SC 13D/A</documentType>
+  <filingDate>2026-04-02</filingDate>
+  <dateOfEvent>2026-04-01</dateOfEvent>
+  <subjectCompany>
+    <companyName>Apple Inc.</companyName>
+    <cik>0000320193</cik>
+  </subjectCompany>
+  <reportingPerson>
+    <rptOwnerCik>0007777777</rptOwnerCik>
+    <rptOwnerName>Activist Capital LP</rptOwnerName>
+  </reportingPerson>
+  <cusip>037833100</cusip>
+  <percentOfClass>4.1</percentOfClass>
+  <aggregateAmountOwned>620000</aggregateAmountOwned>
+</edgarSubmission>

@@ -1,0 +1,43 @@
+{
+  "draw": 1,
+  "recordsTotal": 80,
+  "recordsFiltered": 80,
+  "data": [
+    [
+      "John",
+      "Boozman",
+      "Boozman, John (Senator)",
+      "<a href=\"/search/view/ptr/727b4eb6-d8c7-4792-aa5b-c651c2d72f9c/\" target=\"_blank\">Periodic Transaction Report for 06/16/2026 (Amendment 1)</a>",
+      "06/16/2026"
+    ],
+    [
+      "John",
+      "Boozman",
+      "Boozman, John (Senator)",
+      "<a href=\"/search/view/ptr/a9754ff5-901a-4877-b7be-a647bd361c52/\" target=\"_blank\">Periodic Transaction Report for 06/16/2026</a>",
+      "06/16/2026"
+    ],
+    [
+      "John",
+      "Boozman",
+      "Boozman, John (Senator)",
+      "<a href=\"/search/view/ptr/2e076759-19df-458d-a3be-53610b8be5d0/\" target=\"_blank\">Periodic Transaction Report for 06/16/2026</a>",
+      "06/16/2026"
+    ],
+    [
+      "John",
+      "Fetterman",
+      "Fetterman, John (Senator)",
+      "<a href=\"/search/view/ptr/4b69867f-0376-4526-93f2-cd556b1155c9/\" target=\"_blank\">Periodic Transaction Report for 06/12/2026</a>",
+      "06/12/2026"
+    ],
+    [
+      "Gary C",
+      "Peters",
+      "Peters, Gary (Senator)",
+      "<a href=\"/search/view/ptr/be9bb561-8290-4364-85b4-06a59ef0ec01/\" target=\"_blank\">Periodic Transaction Report for 06/11/2026</a>",
+      "06/11/2026"
+    ]
+  ],
+  "_fixture_note": "5 of 80 rows captured 2026-06-19. Real API response from /search/report/data/ with report_types=[11], filer_types=[1], submitted_start_date=01/01/2026."
+}

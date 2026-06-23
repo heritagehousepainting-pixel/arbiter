@@ -1,0 +1,233 @@
+/*
+ * LANE 5 — global.css
+ * Loaded via side-effect import in effects/PostFX.tsx (no frozen file edits needed).
+ *
+ * Design goals:
+ *   - Premium dark-observatory typography, font-smoothing, selection styling
+ *   - Tailored custom scrollbars matching the dark theme
+ *   - CSS custom properties mirroring theme.ts tokens for CSS-land use
+ *   - Base resets that don't fight Three.js Canvas
+ */
+
+/* ── Inter font (system-ui fallback chain if CDN unavailable) ────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
+
+/* ── CSS custom properties (mirrors theme.ts tokens) ─────────────────────── */
+:root {
+  /* Palette */
+  --bg:            #05060a;
+  --bg-surface:    #090b13;
+  --bg-overlay:    #0d1120;
+  --bg-rim:        #141828;
+  --text:          #e7ecff;
+  --text-sub:      #a8b4cf;
+  --muted:         #8d99ae;
+  --text-dim:      #4a5468;
+  --ok:            #06d6a0;
+  --bad:           #ef476f;
+  --warn:          #ffd166;
+  --accent:        #5b8cff;
+  --accent-dim:    #2a4a99;
+
+  /* Cluster accents */
+  --cluster-sources:    #5b8cff;
+  --cluster-figures:    #ffd166;
+  --cluster-council:    #06d6a0;
+  --cluster-core:       #ef476f;
+  --cluster-ideas:      #c77dff;
+  --cluster-execution:  #4cc9f0;
+  --cluster-market:     #e7ecff;
+  --cluster-learning:   #80ed99;
+  --cluster-infra:      #8d99ae;
+
+  /* Type */
+  --font-sans: 'Inter', 'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Fira Code', 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Motion */
+  --dur-fast:   160ms;
+  --dur-normal: 280ms;
+  --dur-slow:   480ms;
+  --ease-out:   cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-inout: cubic-bezier(0.76, 0, 0.24, 1);
+  --ease-spring:cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ── Minimal resets ───────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden; /* Three.js canvas takes the viewport */
+}
+
+/* ── Base body ────────────────────────────────────────────────────────────── */
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  /* macOS/Linux sub-pixel AA */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1, "ss01" 1;
+}
+
+/* ── Selection ────────────────────────────────────────────────────────────── */
+::selection {
+  background: #5b8cff44;
+  color: #e7ecff;
+}
+
+/* ── Custom scrollbars — dark constellation style ────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-surface);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg-rim);
+  border-radius: 3px;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-rim) var(--bg-surface);
+}
+
+/* ── Monospace elements ───────────────────────────────────────────────────── */
+code, pre, kbd, samp {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  font-variant-ligatures: contextual;
+}
+
+/* ── Reduced-motion: suppress transitions for a11y ───────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Focus visible — accessible keyboard navigation ──────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* ── Utility classes for UI layer (Lane 4) ───────────────────────────────── */
+.text-mono {
+  font-family: var(--font-mono);
+  letter-spacing: 0.03em;
+}
+
+.text-ok    { color: var(--ok); }
+.text-bad   { color: var(--bad); }
+.text-warn  { color: var(--warn); }
+.text-muted { color: var(--muted); }
+.text-accent{ color: var(--accent); }
+
+/* ── Cockpit panel base ──────────────────────────────────────────────────── */
+.cockpit-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-rim);
+  border-radius: 10px;
+  box-shadow:
+    0 8px 32px rgba(0,0,0,0.7),
+    0 0 0 1px rgba(255,255,255,0.06);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* ── Status dot — used by HUD ────────────────────────────────────────────── */
+.status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot--ok   { background: var(--ok);   box-shadow: 0 0 6px 2px #06d6a066; }
+.status-dot--bad  { background: var(--bad);  box-shadow: 0 0 6px 2px #ef476f66; }
+.status-dot--warn { background: var(--warn); box-shadow: 0 0 6px 2px #ffd16666; }
+.status-dot--dim  { background: var(--muted); }
+
+/* Pulsing beacon — gated by reduced-motion */
+@keyframes beacon-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.85); }
+}
+.beacon {
+  animation: beacon-pulse 2s var(--ease-inout) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .beacon { animation: none; }
+}
+
+/* ── Kill-switch halted overlay — clamps the scene ──────────────────────── */
+.halted-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  border: 2px solid var(--bad);
+  border-radius: 0;
+  box-shadow:
+    inset 0 0 80px 20px rgba(239,71,111,0.12),
+    0 0 0 0 transparent;
+  z-index: 50;
+  animation: halted-pulse 3s var(--ease-inout) infinite;
+}
+@keyframes halted-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .halted-overlay { animation: none; }
+}
+
+/* ── Tooltip ─────────────────────────────────────────────────────────────── */
+.node-tooltip {
+  position: fixed;
+  pointer-events: none;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.4;
+  background: var(--bg-overlay);
+  border: 1px solid var(--bg-rim);
+  border-radius: 6px;
+  padding: 8px 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.07);
+  z-index: 100;
+  max-width: 240px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* ── Fade-in animation for panels ────────────────────────────────────────── */
+@keyframes fade-slide-in {
+  from { opacity: 0; transform: translateX(12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.panel-enter {
+  animation: fade-slide-in var(--dur-normal) var(--ease-out) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel-enter { animation: none; }
+}
