@@ -193,6 +193,18 @@ class Config:
     # Env var: A3_MIN_CONFIDENCE.
     a3_min_confidence: float = 0.0
 
+    # A3 news weight BOOST (2026-06-23 spec) — "trust news more".  The news
+    # advisor's resolved fusion weight is multiplied by a3_weight_multiplier and
+    # capped at a3_weight_cap, applied on BOTH the cold-floor and graduated paths
+    # but NOT on the negative-skill (suppressed) path — so a news advisor that
+    # proves wrong is still reined in by the learning loop.  Default 2.0 / 0.50
+    # = "strong lead, not dictator" (a consensus of other advisors can still
+    # out-total it after fusion normalization).  Multiplier 1.0 disables.
+    # Env vars: A3_WEIGHT_MULTIPLIER, A3_WEIGHT_CAP, A3_ADVISOR_ID.
+    a3_weight_multiplier: float = 2.0
+    a3_weight_cap: float = 0.50
+    a3_advisor_id: str = "A3.news"
+
     # A1.fund (Form 13F) advisor — quarterly fund-manager holdings signals.
     # Env var: FORM13F_MIN_POSITION_USD
     form13f_min_position_usd: float = 10_000_000.0
@@ -362,6 +374,9 @@ def load_config(config_path: Path | None = None) -> Config:
         finnhub_api_key=_env_str("FINNHUB_API_KEY", str(finnhub.get("api_key", ""))),
         a3_min_stance=_env_float("A3_MIN_STANCE", float(finnhub.get("min_stance", 0.25))),
         a3_min_confidence=_env_float("A3_MIN_CONFIDENCE", float(finnhub.get("min_confidence", 0.0))),
+        a3_weight_multiplier=_env_float("A3_WEIGHT_MULTIPLIER", float(finnhub.get("weight_multiplier", 2.0))),
+        a3_weight_cap=_env_float("A3_WEIGHT_CAP", float(finnhub.get("weight_cap", 0.50))),
+        a3_advisor_id=_env_str("A3_ADVISOR_ID", str(finnhub.get("advisor_id", "A3.news"))),
         kill_switch_url=_env_str("KILL_SWITCH_URL", str(alerting.get("kill_switch_url", ""))),
         alert_webhook_url=_env_str("ALERT_WEBHOOK_URL", str(alerting.get("alert_webhook_url", ""))),
         fast_interval_s=_env_float("ARBITER_FAST_INTERVAL_S", float(daemon.get("fast_interval_s", 180.0))),

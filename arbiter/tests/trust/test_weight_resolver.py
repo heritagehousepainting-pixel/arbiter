@@ -137,3 +137,66 @@ def test_correlation_matrix_passed_through():
     )
     rb = resolve_weight_bundle(led, ["A1.insider"], equal_floor=0.5)
     assert rb.correlation_matrix == {("A1.insider", "A1.congress"): 0.7}
+
+
+# ---------------------------------------------------------------------------
+# News-advisor blanket weight boost (2026-06-23 spec:
+# docs/superpowers/specs/2026-06-23-news-weight-boost-design.md)
+# ---------------------------------------------------------------------------
+
+NEWS = "A3.news"
+LIVE_NEWS = ["A1.insider", NEWS]
+
+
+def test_news_boost_is_noop_by_default():
+    """No news params → A3 floored normally (back-compat for existing callers)."""
+    rb = resolve_weight_bundle(None, LIVE_NEWS, equal_floor=EQUAL_FLOOR)
+    assert rb.weights[NEWS].weight == EQUAL_FLOOR
+    assert rb.weights["A1.insider"].weight == EQUAL_FLOOR
+
+
+def test_news_advisor_cold_weight_is_boosted():
+    """Cold A3 → floor * multiplier, capped; non-news sibling untouched."""
+    rb = resolve_weight_bundle(
+        None, LIVE_NEWS, equal_floor=0.25,
+        news_advisor_id=NEWS, news_multiplier=2.0, news_cap=0.50,
+    )
+    assert rb.weights[NEWS].weight == 0.50          # 0.25 * 2, under cap
+    assert rb.weights[NEWS].shadow is False
+    assert rb.weights["A1.insider"].weight == 0.25  # unchanged
+
+
+def test_news_boost_respects_cap():
+    """Boost never exceeds news_cap."""
+    rb = resolve_weight_bundle(
+        None, LIVE_NEWS, equal_floor=0.40,
+        news_advisor_id=NEWS, news_multiplier=2.0, news_cap=0.50,
+    )
+    assert rb.weights[NEWS].weight == 0.50  # min(0.40*2=0.80, 0.50)
+
+
+def test_graduated_news_advisor_boosted_and_capped():
+    """Graduated A3 learned weight is boosted then capped."""
+    led = WeightBundle(
+        weights={
+            "A1.insider": AdvisorWeight("A1.insider", 0.0, 0.0, 0.0, shadow=True),
+            NEWS: AdvisorWeight(NEWS, 0.10, 0.05, 0.18, shadow=False),
+        },
+        correlation_matrix={},
+    )
+    rb = resolve_weight_bundle(
+        led, LIVE_NEWS, equal_floor=0.25,
+        news_advisor_id=NEWS, news_multiplier=2.0, news_cap=0.50,
+    )
+    assert rb.weights[NEWS].weight == 0.20  # min(0.10*2=0.20, 0.50)
+
+
+def test_news_negative_skill_not_rescued_by_boost():
+    """A3 flagged negative_skill stays 0/shadow — the boost must NOT rescue it."""
+    rb = resolve_weight_bundle(
+        None, LIVE_NEWS, equal_floor=0.25,
+        cap_reasons={NEWS: "negative_skill"},
+        news_advisor_id=NEWS, news_multiplier=2.0, news_cap=0.50,
+    )
+    assert rb.weights[NEWS].weight == 0.0
+    assert rb.weights[NEWS].shadow is True

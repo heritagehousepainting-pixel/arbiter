@@ -118,9 +118,14 @@ def build_learning_inputs(engine: "Engine", now: datetime):
             cap_reasons = trust_store.load_cap_reasons(engine.conn, now, backtest=False)
             calibrator = MultiAdvisorCalibrator(engine.calibrators)
 
-    # Apply the bootstrap floor / negative-skill suppression (D1/D3/D6).
+    # Apply the bootstrap floor / negative-skill suppression (D1/D3/D6) + the
+    # blanket A3 news weight boost ("trust news more"; getattr defaults keep
+    # minimal test configs working — boost is a no-op at multiplier 1.0).
     weight_bundle = resolve_weight_bundle(
-        ledger_bundle, live_ids, equal_floor=floor, cap_reasons=cap_reasons
+        ledger_bundle, live_ids, equal_floor=floor, cap_reasons=cap_reasons,
+        news_advisor_id=getattr(engine.config, "a3_advisor_id", "A3.news"),
+        news_multiplier=float(getattr(engine.config, "a3_weight_multiplier", 1.0)),
+        news_cap=float(getattr(engine.config, "a3_weight_cap", 1.0)),
     )
     return weight_bundle, calibrator
 

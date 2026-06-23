@@ -73,6 +73,9 @@ def resolve_weight_bundle(
     *,
     equal_floor: float = EQUAL_FLOOR,
     cap_reasons: Mapping[str, str | None] | None = None,
+    news_advisor_id: str | None = None,
+    news_multiplier: float = 1.0,
+    news_cap: float = 1.0,
 ) -> WeightBundle:
     """Build the live ``WeightBundle`` handed to ``fuse``.
 
@@ -137,6 +140,24 @@ def resolve_weight_bundle(
             ci_high=aw.ci_high,
             shadow=False,
         )
+
+    # Blanket news-advisor weight boost (2026-06-23 spec).  Applied as a POST
+    # pass so it stacks on whichever weight was resolved (cold floor OR learned)
+    # — "trust news more by default".  It deliberately skips shadow/suppressed
+    # entries, so a ``negative_skill`` news advisor stays muted: the learning
+    # loop can still rein in news that proves wrong (the boost is a strong prior,
+    # not an immortal override).  No-op at the default multiplier/cap.
+    if news_advisor_id is not None:
+        aw = resolved.get(news_advisor_id)
+        if aw is not None and not aw.shadow and aw.weight > 0.0:
+            boosted = min(aw.weight * news_multiplier, news_cap)
+            resolved[news_advisor_id] = AdvisorWeight(
+                advisor_id=news_advisor_id,
+                weight=boosted,
+                ci_low=boosted,
+                ci_high=boosted,
+                shadow=False,
+            )
 
     corr = dict(ledger_output.correlation_matrix) if ledger_output is not None else {}
     return WeightBundle(weights=resolved, correlation_matrix=corr)
