@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mirofish"
+version = "0.1.0"
+description = "MiroFish A2 'brain' — an isolated, loopback-only equity-analysis service that emits independent analyst opinions over HTTP."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+    "anthropic",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[project.scripts]
+mirofish = "mirofish.__main__:main"
+
+[tool.setuptools]
+packages = [
+    "mirofish",
+    "mirofish.clients",
+    "mirofish.evidence",
+    "mirofish.data",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# E741 is intentionally allowed on Bar.l (mirrors Alpaca's wire key); it is
+# silenced inline with `# noqa: E741` in types.py rather than globally.
+extend-select = ["I"]

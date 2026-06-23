@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MiroFish A2 service — always-on loopback inference for arbiter's A2 advisor.
+     Install:   cp mirofish/deploy/com.mirofish.service.plist ~/Library/LaunchAgents/
+                launchctl load ~/Library/LaunchAgents/com.mirofish.service.plist
+     Stop:      launchctl unload ~/Library/LaunchAgents/com.mirofish.service.plist
+     Logs:      /tmp/mirofish.out.log / /tmp/mirofish.err.log
+     Keys are read from arbiter/.env by run.sh (not duplicated here). -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mirofish.service</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/jonathanmorris/poly_bot/mirofish/run.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/jonathanmorris/poly_bot</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/mirofish.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/mirofish.err.log</string>
+</dict>
+</plist>
