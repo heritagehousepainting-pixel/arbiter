@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import sqlite3
 import sys
-from pathlib import Path
 
 from .contract import NodeDetail, NodeType
 from .db import DEFAULT_DB_PATH
@@ -356,11 +355,13 @@ def _src_detail(conn: sqlite3.Connection, node_id: str) -> NodeDetail:
     src_map = {
         "src.form4": "form4",
         "src.form13d": "form13d",
+        "src.form13f": "form13f",
         "src.congress": "congress",
     }
     label_map = {
         "src.form4": "SEC Form 4 (insiders)",
         "src.form13d": "SEC 13D/13G (activists)",
+        "src.form13f": "SEC 13F (fund managers)",
         "src.congress": "Congress PTR",
         "src.alpaca": "Alpaca market data",
         "src.mirofish": "MiroFish A2 service",
@@ -602,7 +603,10 @@ def build_node_detail(conn: sqlite3.Connection, node_id: str) -> NodeDetail | No
 
     # --- data sources ---
     if prefix == "src":
-        known_src = {"src.form4", "src.form13d", "src.congress", "src.alpaca", "src.mirofish"}
+        known_src = {
+            "src.form4", "src.form13d", "src.form13f", "src.congress",
+            "src.alpaca", "src.mirofish",
+        }
         if node_id not in known_src:
             return None
         return _src_detail(conn, node_id)
