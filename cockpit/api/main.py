@@ -22,7 +22,9 @@ from .state import _heartbeat, build_state
 app = FastAPI(title="Arbiter Cockpit API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    # Vite picks the first free port (5173, then 5174, 5175, ...), so allow any
+    # localhost dev port rather than pinning one that may be taken by another app.
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_methods=["GET"],
     allow_headers=["*"],
 )
