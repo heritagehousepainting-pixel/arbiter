@@ -47,8 +47,17 @@ _COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _SUBMISSIONS_URL_TMPL = "https://data.sec.gov/submissions/CIK{cik10}.json"
 
 # 13D/13G submission form values as they appear in submissions JSON `form`.
+# EDGAR emits BOTH the legacy ``SC 13D`` spelling and the newer ``SCHEDULE 13D``
+# spelling (the modern filer interface switched ~2024) — for the same filings.
+# Both MUST be matched or recent 13D/G filings are silently dropped (this was
+# the bug that made the activist channel look dead).  Downstream schedule /
+# amendment detection keys off ``"13D" in form`` and ``form.endswith("/A")``,
+# which both spellings satisfy.
 _SC13_FORMS: frozenset[str] = frozenset(
-    {"SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A"}
+    {
+        "SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A",
+        "SCHEDULE 13D", "SCHEDULE 13D/A", "SCHEDULE 13G", "SCHEDULE 13G/A",
+    }
 )
 
 # 13F-HR form values as they appear in submissions JSON `form`.
@@ -179,6 +188,8 @@ class EdgarClient:
         self._last_request_ts: float = 0.0
         # Lazily-fetched {ticker -> cik10} map (company_tickers.json).
         self._ticker_cik_map: dict[str, str] | None = None
+        # Lazily-inverted {cik10 -> ticker} map (built from the above on demand).
+        self._cik_ticker_map: dict[str, str] | None = None
 
     @classmethod
     def from_config_or_none(
@@ -317,6 +328,55 @@ class EdgarClient:
             row["schedule"] = "13D" if "13D" in form else "13G"
             row["is_amendment"] = form.endswith("/A")
         return rows
+
+    def search_sc13_by_filer(
+        self,
+        cik: str,
+        *,
+        count: int = 20,
+    ) -> list[dict]:
+        """Discover a known activist's *own* recent 13D/13G filings.
+
+        ``cik`` is the activist's filer CIK (from
+        ``data.activist_filers.ACTIVIST_FILERS``) — **not** a ticker.  Unlike
+        :meth:`search_sc13_filings` (which searches the *subject* company), this
+        reads the filer's own submissions JSON, mirroring
+        :meth:`search_form13f_filings`.
+
+        Returns newest-first dicts with keys ``cik``, ``accession``,
+        ``filed_at``, ``primary_document``, plus ``schedule`` (``"13D"``/
+        ``"13G"``) and ``is_amendment``.  The subject ticker is NOT known here —
+        it is resolved downstream from the filing's CUSIP/issuer.
+        """
+        body = self._get(_SUBMISSIONS_URL_TMPL.format(cik10=cik))
+        rows = _parse_submissions_json(
+            body, cik, form_types=_SC13_FORMS, count=count, keep_form=True
+        )
+        for row in rows:
+            form = row.pop("form", "")
+            row["schedule"] = "13D" if "13D" in form else "13G"
+            row["is_amendment"] = form.endswith("/A")
+        return rows
+
+    def get_ticker_for_cik(self, cik: str) -> str | None:
+        """Reverse-resolve a zero-padded issuer CIK to its primary ticker.
+
+        Uses the same ``company_tickers.json`` map cached by
+        :meth:`get_cik_for_ticker`, inverted on first use.  Returns ``None`` for
+        a CIK with no listed ticker (e.g. a private subject).  When several
+        tickers share a CIK (dual-class), the first one in the file wins —
+        good enough for trade routing where any listed class is acceptable.
+        """
+        if self._ticker_cik_map is None:
+            raw = self._get(_COMPANY_TICKERS_URL)
+            self._ticker_cik_map = _parse_company_tickers(raw)
+        if self._cik_ticker_map is None:
+            # Invert {ticker -> cik10}; keep the FIRST ticker seen per CIK.
+            inverted: dict[str, str] = {}
+            for tkr, c in self._ticker_cik_map.items():
+                inverted.setdefault(c, tkr)
+            self._cik_ticker_map = inverted
+        return self._cik_ticker_map.get(str(cik).strip())
 
     def search_form13f_filings(
         self,

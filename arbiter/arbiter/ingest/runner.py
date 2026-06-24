@@ -25,9 +25,12 @@ from typing import Callable, Sequence
 import structlog
 
 from arbiter.config import Config
+from arbiter.data.activist_filers import ACTIVIST_FILERS
+from arbiter.data.sectors import covered_tickers
 from arbiter.ingest.congress import CongressClient, fetch_house_ptrs, fetch_senate_ptrs
 from arbiter.ingest.edgar import normalize_sc13, parse_sc13
 from arbiter.ingest.edgar.client import EdgarClient
+from arbiter.ingest.edgar.cusip_resolver import resolve_cusip
 from arbiter.ingest.edgar.normalize import normalize as _edgar_normalize
 from arbiter.ingest.edgar.parser import parse_form4
 from arbiter.ingest.identity.resolver import resolve_person
@@ -36,13 +39,18 @@ from arbiter.ingest.writer import write_filing
 log = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# Default watchlist (used when callers do not supply tickers for form4)
+# Default watchlist (used when callers do not supply tickers)
 # ---------------------------------------------------------------------------
+#
+# Derived from the maintained sector map (``data.sectors``) — the same
+# 11-sector, ~136-name universe that backs the per-sector risk cap.  This is the
+# shared ticker universe for THREE consumers: form4 (insider) ingest, form13d
+# (activist) subject-search, and the A3 news pipeline (which imports this name
+# from ``engine/_engine.py``).  Keeping it equal to ``covered_tickers()`` means
+# the watchlist ⊆ sector-map invariant (test_sectors) holds by construction and
+# can never drift.  Sorted for deterministic ingest order.
 
-_DEFAULT_WATCHLIST: tuple[str, ...] = (
-    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA",
-    "META", "TSLA", "BRK.B", "JPM", "UNH",
-)
+_DEFAULT_WATCHLIST: tuple[str, ...] = tuple(sorted(covered_tickers()))
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +158,11 @@ def run_ingest(
         _ingest_form4(config, conn=conn, clock=clock, summary=summary, tickers=tickers)
 
     if "form13d" in sources_tuple:
+        # Two discovery paths feed the activist channel: subject-search (13D
+        # filed AGAINST a watchlist ticker) and filer-search (what a known
+        # activist filed against ANYONE).  Union, deduped by the writer.
         _ingest_sc13(config, conn=conn, clock=clock, summary=summary, tickers=tickers)
+        _ingest_sc13_by_filer(config, conn=conn, clock=clock, summary=summary)
 
     if "congress" in sources_tuple:
         _ingest_congress(
@@ -435,6 +447,184 @@ def _ingest_sc13_ticker(
             log.warning(
                 "run_ingest.form13d_filing_error",
                 ticker=ticker,
+                accession=accession,
+                error=str(exc),
+            )
+            src.errors.append(msg)
+            src.n_skipped += 1
+            # Continue to the next filing — fault-isolated.
+
+
+# ---------------------------------------------------------------------------
+# Private: Schedule 13D by-filer ingestion (named activists)
+# ---------------------------------------------------------------------------
+
+def _resolve_subject_ticker(
+    client: object,
+    conn: sqlite3.Connection,
+    row: dict,
+    asset_lookup: "Callable[[], dict[str, str]]",
+    clock: Callable[[], str],
+) -> str | None:
+    """Resolve the subject ticker for a filer-discovered 13D (safety-first).
+
+    Priority: exact subject-CIK reverse lookup, then CUSIP resolution (cache →
+    seed → Alpaca issuer-name match).  Returns ``None`` (→ DROP, never trade on
+    a guess) when neither resolves with confidence — consistent with the 13F
+    CUSIP-drop policy.
+    """
+    subj_cik = (row.get("subject_cik") or "").strip()
+    if subj_cik:
+        t = client.get_ticker_for_cik(subj_cik.zfill(10))  # type: ignore[attr-defined]
+        if t:
+            return t.upper()
+    cusip = (row.get("cusip") or "").strip()
+    if cusip:
+        t = resolve_cusip(
+            conn,
+            cusip,
+            row.get("subject_name") or "",
+            asset_lookup=asset_lookup,
+            now_iso=clock(),
+        )
+        if t:
+            return t.upper()
+    return None
+
+
+def _ingest_sc13_by_filer(
+    config: Config,
+    *,
+    conn: sqlite3.Connection,
+    clock: Callable[[], str],
+    summary: IngestSummary,
+) -> None:
+    """Ingest 13D/13G filings discovered by tracked-activist filer CIK.
+
+    Mirrors ``_ingest_form13f``'s shape: iterate a static roster
+    (``ACTIVIST_FILERS``), read each filer's own submissions for 13D/13G, fetch
+    + parse each doc, resolve the subject ticker, and write keepers.  Counts go
+    in a separate ``form13d_activist`` per-source bucket (still ``source=
+    "form13d"`` rows in the DB), so the subject-search vs filer-search split is
+    visible.  UA-empty guard skips this path (not a crash); other sources run.
+    """
+    src = SourceSummary()
+    summary.per_source["form13d_activist"] = src
+
+    if not config.edgar_user_agent or not config.edgar_user_agent.strip():
+        msg = (
+            "form13d_activist skipped: Config.edgar_user_agent is empty. "
+            "Set EDGAR_USER_AGENT or [edgar] user_agent in arbiter.toml."
+        )
+        log.warning("run_ingest.form13d_activist_skipped_no_user_agent")
+        summary.notes.append(msg)
+        src.errors.append(msg)
+        return
+
+    asset_lookup = _alpaca_asset_lookup(config)
+
+    try:
+        client = EdgarClient(config=config)
+    except Exception as exc:
+        msg = f"form13d_activist: failed to create EdgarClient: {exc}"
+        log.error("run_ingest.form13d_activist_client_error", error=str(exc))
+        src.errors.append(msg)
+        return
+
+    try:
+        for filer in ACTIVIST_FILERS:
+            _ingest_sc13_filer_one(
+                filer=filer,
+                client=client,
+                conn=conn,
+                clock=clock,
+                src=src,
+                asset_lookup=asset_lookup,
+            )
+    finally:
+        client.close()
+
+
+def _ingest_sc13_filer_one(
+    *,
+    filer: object,
+    client: object,
+    conn: sqlite3.Connection,
+    clock: Callable[[], str],
+    src: SourceSummary,
+    asset_lookup: "Callable[[], dict[str, str]]",
+) -> None:
+    """Ingest one activist filer's recent 13D/13G filings (fault-isolated)."""
+    cik = filer.cik  # type: ignore[attr-defined]
+    try:
+        refs = client.search_sc13_by_filer(cik)  # type: ignore[attr-defined]
+    except Exception as exc:
+        msg = f"form13d_activist/{cik}: search failed: {exc}"
+        log.warning("run_ingest.form13d_activist_search_error", cik=cik, error=str(exc))
+        src.errors.append(msg)
+        return
+
+    for ref in refs:
+        accession = ref.get("accession", "")
+        if not accession:
+            src.n_skipped += 1
+            continue
+
+        src.n_fetched += 1
+        try:
+            doc = client.get_sc13_doc(  # type: ignore[attr-defined]
+                accession, cik, primary_document=ref.get("primary_document")
+            )
+            parsed = parse_sc13(
+                doc, "", accession, schedule=ref.get("schedule", "13D")
+            )
+
+            for row in parsed:
+                ticker = _resolve_subject_ticker(client, conn, row, asset_lookup, clock)
+                if not ticker:
+                    # Unresolved subject — drop, never trade on a guess.
+                    src.n_skipped += 1
+                    continue
+
+                row = dict(row)
+                row["ticker"] = ticker
+                # Identity = the activist filer.  Prefer the parsed reporting
+                # person; fall back to the roster name + filer CIK.
+                person_name = row.get("person_name") or filer.name  # type: ignore[attr-defined]
+                hints = {"person_id": row.get("person_id") or cik}
+                try:
+                    person_id = resolve_person(
+                        person_name, "form13d", hints, conn, clock
+                    )
+                    row["person_id"] = person_id
+                    row["person_name"] = person_name
+
+                    for raw in normalize_sc13([row]):
+                        before = _count_filings(conn)
+                        fid = write_filing(conn, raw, clock)
+                        after = _count_filings(conn)
+                        if fid is None:
+                            src.n_skipped += 1
+                        elif after > before:
+                            src.n_written += 1
+                        else:
+                            src.n_skipped += 1
+                except Exception as exc:
+                    msg = f"form13d_activist/{cik}/{accession}: write error: {exc}"
+                    log.warning(
+                        "run_ingest.form13d_activist_write_error",
+                        cik=cik,
+                        accession=accession,
+                        error=str(exc),
+                    )
+                    src.errors.append(msg)
+                    src.n_skipped += 1
+
+        except Exception as exc:
+            msg = f"form13d_activist/{cik}/{accession}: fetch/parse error: {exc}"
+            log.warning(
+                "run_ingest.form13d_activist_filing_error",
+                cik=cik,
                 accession=accession,
                 error=str(exc),
             )

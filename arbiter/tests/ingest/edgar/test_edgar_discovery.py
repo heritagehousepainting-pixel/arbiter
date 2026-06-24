@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from arbiter.ingest.edgar.client import EdgarClient
 from arbiter.ingest.edgar.normalize import normalize
 from arbiter.ingest.edgar.parser import parse_form4
@@ -231,6 +229,61 @@ def test_search_sc13_filings_unresolvable_ticker():
     mock_http = _routed_http({"company_tickers.json": COMPANY_TICKERS})
     client = _client(mock_http)
     assert client.search_sc13_filings("NOPE") == []
+
+
+# ---------------------------------------------------------------------------
+# Regression: EDGAR's modern "SCHEDULE 13D" spelling must be recognized.
+# (Older fixtures use "SC 13D"; live EDGAR switched many filings to
+# "SCHEDULE 13D/A".  Matching only "SC 13D" silently dropped recent 13Ds.)
+# ---------------------------------------------------------------------------
+
+_SUBMISSIONS_SCHEDULE_SPELLING = """\
+{"filings": {"recent": {
+  "form":            ["SCHEDULE 13D/A", "SCHEDULE 13G", "8-K"],
+  "accessionNumber": ["0001-26-000001", "0001-26-000002", "0001-26-000003"],
+  "filingDate":      ["2026-06-09", "2026-05-01", "2026-04-01"],
+  "primaryDocument": ["a.xml", "b.xml", "c.htm"]
+}}}"""
+
+
+def test_search_sc13_filings_recognizes_schedule_spelling():
+    mock_http = _routed_http(
+        {
+            "company_tickers.json": COMPANY_TICKERS,
+            "submissions/CIK": _SUBMISSIONS_SCHEDULE_SPELLING,
+        }
+    )
+    client = _client(mock_http)
+    rows = client.search_sc13_filings("AAPL")
+    assert len(rows) == 2  # SCHEDULE 13D/A + SCHEDULE 13G (8-K excluded)
+    assert rows[0]["schedule"] == "13D"
+    assert rows[0]["is_amendment"] is True
+    assert rows[1]["schedule"] == "13G"
+    assert rows[1]["is_amendment"] is False
+
+
+# ---------------------------------------------------------------------------
+# search_sc13_by_filer (named-activist discovery) + get_ticker_for_cik
+# ---------------------------------------------------------------------------
+
+def test_search_sc13_by_filer_reads_own_submissions():
+    mock_http = _routed_http({"submissions/CIK": _SUBMISSIONS_SCHEDULE_SPELLING})
+    client = _client(mock_http)
+    # No ticker→CIK lookup: the activist CIK is passed directly.
+    rows = client.search_sc13_by_filer("0001517137")
+    assert len(rows) == 2
+    assert rows[0]["accession"] == "0001-26-000001"
+    assert rows[0]["schedule"] == "13D"
+    assert rows[0]["is_amendment"] is True
+    assert "form" not in rows[0]  # internal key popped
+
+
+def test_get_ticker_for_cik_reverse_lookup():
+    mock_http = _routed_http({"company_tickers.json": COMPANY_TICKERS})
+    client = _client(mock_http)
+    cik = client.get_cik_for_ticker("AAPL")
+    assert client.get_ticker_for_cik(cik) == "AAPL"
+    assert client.get_ticker_for_cik("0000000000") is None
 
 
 def test_get_sc13_doc_primary_txt_skips_index():

@@ -138,6 +138,15 @@ def _parse_structured(
         root, "aggregateAmountOwned", "aggregateAmount", "amountBeneficiallyOwned"
     )
     cusip = _find_text(root, "cusip", "cusipNumber") or None
+    # Subject (issuer) name + CIK — used to resolve a ticker when the filing
+    # was discovered by filer CIK (no subject ticker known up front).  CIK is
+    # the reliable key (exact reverse lookup); name is the CUSIP-match fallback.
+    subject_name = _find_text(
+        root, "issuerName", "nameOfIssuer", "subjectCompanyName", "issuerNm"
+    ) or None
+    subject_cik = _find_text(
+        root, "issuerCik", "subjectCompanyCik", "cikOfIssuer", "issuerCIK"
+    ) or None
 
     event_date = _find_text(
         root, "dateOfEvent", "eventDate", "dateOfEventRequiringFiling"
@@ -158,6 +167,8 @@ def _parse_structured(
         "percent_of_class": percent_of_class,
         "aggregate_amount": aggregate_amount,
         "cusip": cusip,
+        "subject_name": subject_name,
+        "subject_cik": subject_cik,
         "transaction_code": transaction_code,
         "txn_idx": 0,
         "accession": accession,
@@ -188,6 +199,25 @@ def _parse_header_only(
     person_id = ""
     filed_by_idx = re.search(r"FILED\s+BY", raw_text, re.IGNORECASE)
     search_region = raw_text[filed_by_idx.start():] if filed_by_idx else raw_text
+
+    # Subject (issuer) name — the "SUBJECT COMPANY" block precedes "FILED BY".
+    # Used to resolve a ticker for filer-CIK-discovered filings.
+    subject_name = None
+    subject_cik = None
+    subject_region = raw_text[:filed_by_idx.start()] if filed_by_idx else raw_text
+    subj_idx = re.search(r"SUBJECT\s+COMPANY", subject_region, re.IGNORECASE)
+    if subj_idx:
+        subj_tail = subject_region[subj_idx.start():]
+        subj_name_m = re.search(
+            r"COMPANY\s+CONFORMED\s+NAME:\s*(.+)", subj_tail, re.IGNORECASE
+        )
+        if subj_name_m:
+            subject_name = subj_name_m.group(1).strip()
+        subj_cik_m = re.search(
+            r"CENTRAL\s+INDEX\s+KEY:\s*([0-9]+)", subj_tail, re.IGNORECASE
+        )
+        if subj_cik_m:
+            subject_cik = subj_cik_m.group(1).strip().zfill(10)
     name_m = re.search(
         r"COMPANY\s+CONFORMED\s+NAME:\s*(.+)", search_region, re.IGNORECASE
     )
@@ -226,6 +256,8 @@ def _parse_header_only(
         "percent_of_class": percent_of_class,
         "aggregate_amount": None,
         "cusip": cusip,
+        "subject_name": subject_name,
+        "subject_cik": subject_cik,
         "transaction_code": transaction_code,
         "txn_idx": 0,
         "accession": accession,
