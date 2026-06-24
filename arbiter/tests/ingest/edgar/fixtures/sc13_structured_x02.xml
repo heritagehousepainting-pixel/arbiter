@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<edgarSubmission xmlns="http://www.sec.gov/edgar/schedule13D" xmlns:com="http://www.sec.gov/edgar/common">
+  <schemaVersion>X0202</schemaVersion>
+  <headerData>
+    <submissionType>SCHEDULE 13D/A</submissionType>
+    <filerInfo>
+      <filer>
+        <filerCredentials>
+          <cik>0001517137</cik>
+        </filerCredentials>
+      </filer>
+    </filerInfo>
+  </headerData>
+  <formData>
+    <coverPageHeader>
+      <amendmentNo>5</amendmentNo>
+      <securitiesClassTitle>Common Stock, $0.0001 par value</securitiesClassTitle>
+      <dateOfEvent>06/02/2026</dateOfEvent>
+      <issuerInfo>
+        <issuerCIK>0001604778</issuerCIK>
+        <issuerCusips>
+          <issuerCusipNumber>74736K101</issuerCusipNumber>
+        </issuerCusips>
+        <issuerName>Qorvo, Inc.</issuerName>
+      </issuerInfo>
+    </coverPageHeader>
+    <reportingPersons>
+      <reportingPersonInfo>
+        <reportingPersonCIK>0001517137</reportingPersonCIK>
+        <reportingPersonName>Starboard Value LP</reportingPersonName>
+        <aggregateAmountOwned>5611526.00</aggregateAmountOwned>
+        <percentOfClass>6.4</percentOfClass>
+        <typeOfReportingPerson>PN</typeOfReportingPerson>
+      </reportingPersonInfo>
+      <reportingPersonInfo>
+        <reportingPersonCIK>0001373638</reportingPersonCIK>
+        <reportingPersonName>STARBOARD VALUE &amp; OPPORTUNITY MASTER FUND LTD</reportingPersonName>
+        <aggregateAmountOwned>2424637.00</aggregateAmountOwned>
+        <percentOfClass>2.8</percentOfClass>
+        <typeOfReportingPerson>CO</typeOfReportingPerson>
+      </reportingPersonInfo>
+    </reportingPersons>
+  </formData>
+</edgarSubmission>

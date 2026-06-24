@@ -112,11 +112,115 @@ def _transaction_code(percent_of_class: float | None, is_amendment: bool) -> str
     return "P"
 
 
+# ---------------------------------------------------------------------------
+# Modern SEC structured 13D/13G schema (schemaVersion X02xx, default namespace
+# http://www.sec.gov/edgar/schedule13D).  Rolled out ~2024-2025; ALL recent
+# 13D/13G filings use it.  It differs from the legacy ownershipDocument-style
+# layout in three ways the old parser cannot handle:
+#   1. a DEFAULT XML namespace, so ``root.find(".//tag")`` matches nothing;
+#   2. different tag names (submissionType / reportingPersonCIK / issuerCIK /
+#      issuerCusipNumber) nested under formData/coverPageHeader + reportingPersons;
+#   3. ``dateOfEvent`` in MM/DD/YYYY (the legacy parser only accepts ISO and
+#      raised ValueError → the filing was silently dropped).
+# These helpers match by LOCAL tag name (namespace-agnostic), document order.
+# ---------------------------------------------------------------------------
+
+def _local(tag: str) -> str:
+    """Strip any ``{namespace}`` prefix from an ElementTree tag."""
+    return tag.split("}")[-1]
+
+
+def _x02_first_text(root: ET.Element, *local_names: str) -> str:
+    """First non-empty text whose LOCAL tag name matches, trying names in order."""
+    for name in local_names:
+        for el in root.iter():
+            if _local(el.tag) == name and (el.text or "").strip():
+                return el.text.strip()
+    return ""
+
+
+def _mdy_to_iso(value: str) -> str:
+    """Convert ``MM/DD/YYYY`` to ``YYYY-MM-DD``; pass ISO/empty through unchanged."""
+    s = (value or "").strip()
+    m = re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+    if m:
+        mm, dd, yyyy = m.groups()
+        return f"{yyyy}-{int(mm):02d}-{int(dd):02d}"
+    return s
+
+
+def _is_x02_schema(root: ET.Element) -> bool:
+    """True for the modern structured 13D schema (has formData/reportingPersonInfo)."""
+    for el in root.iter():
+        if _local(el.tag) in ("formData", "reportingPersonInfo"):
+            return True
+    return False
+
+
+def _parse_structured_x02(
+    root: ET.Element, ticker: str, accession: str, schedule_hint: str
+) -> list[dict[str, Any]]:
+    """Parse a modern (X02xx) structured 13D/13G document into one row dict."""
+    submission_type = _x02_first_text(root, "submissionType", "documentType")
+    schedule, is_amendment, is_activist = _schedule_from_doc_type(
+        submission_type, schedule_hint
+    )
+
+    # Lead reporting person = the filer (first reportingPersonInfo block).
+    person_id = _x02_first_text(root, "reportingPersonCIK")
+    person_name = _x02_first_text(root, "reportingPersonName")
+
+    # Subject (issuer) — the company being acquired.
+    subject_cik = _x02_first_text(root, "issuerCIK") or None
+    subject_name = _x02_first_text(root, "issuerName") or None
+    cusip = _x02_first_text(root, "issuerCusipNumber", "cusip", "cusipNumber") or None
+
+    def _num(*names: str) -> float | None:
+        raw = _x02_first_text(root, *names)
+        try:
+            return float(raw) if raw else None
+        except ValueError:
+            return None
+
+    percent_of_class = _num("percentOfClass", "aggregatePercent")
+    aggregate_amount = _num("aggregateAmountOwned", "aggregateAmount")
+
+    # dateOfEvent is the (recent) event date; fall back to a signature date.
+    event_iso = _mdy_to_iso(_x02_first_text(root, "dateOfEvent"))
+    filing_iso = _mdy_to_iso(_x02_first_text(root, "signatureDate", "filingDate"))
+    filing_ts = _parse_filing_ts(event_iso, filing_iso)
+
+    transaction_code = _transaction_code(percent_of_class, is_amendment)
+
+    return [{
+        "ticker": ticker,
+        "person_id": person_id,
+        "person_name": person_name,
+        "filing_ts": filing_ts,
+        "schedule": schedule,
+        "is_amendment": is_amendment,
+        "is_activist": is_activist,
+        "percent_of_class": percent_of_class,
+        "aggregate_amount": aggregate_amount,
+        "cusip": cusip,
+        "subject_name": subject_name,
+        "subject_cik": subject_cik,
+        "transaction_code": transaction_code,
+        "txn_idx": 0,
+        "accession": accession,
+        "is_10b5_1": False,
+    }]
+
+
 def _parse_structured(
     xml_text: str, ticker: str, accession: str, schedule_hint: str
 ) -> list[dict[str, Any]]:
     """Parse a structured 13D/13G XML document. Raises ET.ParseError on bad XML."""
     root = ET.fromstring(xml_text)
+
+    # Modern schema (X02xx) — different namespace/tags/date format.
+    if _is_x02_schema(root):
+        return _parse_structured_x02(root, ticker, accession, schedule_hint)
 
     doc_type = _find_text(root, "documentType")
     schedule, is_amendment, is_activist = _schedule_from_doc_type(

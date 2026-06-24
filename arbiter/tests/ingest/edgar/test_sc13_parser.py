@@ -97,3 +97,34 @@ def test_parse_sc13_schedule_hint_used_when_doctype_silent():
     rows = parse_sc13(xml, "AAPL", "x", schedule="13G")
     assert rows[0]["schedule"] == "13G"
     assert rows[0]["is_activist"] is False
+
+
+# ---------------------------------------------------------------------------
+# Modern structured 13D schema (schemaVersion X02xx) — regression for the bug
+# where every recent (2025-2026) activist 13D parsed empty because the parser
+# only understood the legacy tag layout / ISO dates / no-namespace docs.
+# ---------------------------------------------------------------------------
+
+SC13D_X02 = read_fixture("sc13_structured_x02.xml")
+
+
+def test_parse_sc13_modern_x02_schema():
+    rows = parse_sc13(SC13D_X02, "QRVO", "0000921895-26-000115", schedule="13D")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["schedule"] == "13D"
+    assert row["is_amendment"] is True            # "SCHEDULE 13D/A"
+    assert row["is_activist"] is True
+    # MM/DD/YYYY dateOfEvent parsed to a recent ISO timestamp.
+    assert row["filing_ts"].startswith("2026-06-02")
+    _assert_tz_aware(row["filing_ts"])
+    # Lead reporting person (first block), not a co-filer.
+    assert row["person_id"] == "0001517137"
+    assert row["person_name"] == "Starboard Value LP"
+    assert row["percent_of_class"] == 6.4
+    assert row["aggregate_amount"] == 5611526.0
+    # Subject (issuer) surfaced for downstream ticker resolution.
+    assert row["subject_cik"] == "0001604778"
+    assert row["subject_name"] == "Qorvo, Inc."
+    assert row["cusip"] == "74736K101"
+    assert row["transaction_code"] == "P"         # amendment still >=5%? 6.4 -> P
