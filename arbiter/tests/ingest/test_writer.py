@@ -623,3 +623,39 @@ def test_form4_amendment_does_not_supersede_own_accession_row(conn) -> None:
         "SELECT is_superseded FROM filings WHERE id = ?", (id1,)
     ).fetchone()
     assert row["is_superseded"] == 0, "Idempotent amendment re-write must not self-supersede"
+
+
+def test_reingest_superseded_filing_is_noop_not_constraint_error(conn) -> None:
+    """Re-ingesting a filing that an amendment superseded must be a no-op.
+
+    Regression for the live bug: the (accession, txn_idx) UNIQUE index spans
+    superseded rows, but dedup filtered on is_superseded=0 — so re-ingesting a
+    superseded original missed the existing row and attempted a duplicate
+    INSERT → "UNIQUE constraint failed: filings.accession, filings.txn_idx".
+    """
+    # Original filing (accession + txn_idx → covered by the UNIQUE index).
+    original = _make_raw(accession="ACC-A", filing_ts="2026-01-10T10:00:00+00:00")
+    original["txn_idx"] = 0
+    orig_id = write_filing(conn, original, _clock)
+
+    # An amendment supersedes the original (orig now is_superseded=1).
+    amendment = _make_raw(
+        accession="ACC-B", filing_ts="2026-01-11T09:00:00+00:00", is_amendment=True
+    )
+    amendment["txn_idx"] = 0
+    write_filing(conn, amendment, _clock)
+    assert conn.execute(
+        "SELECT is_superseded FROM filings WHERE id = ?", (orig_id,)
+    ).fetchone()["is_superseded"] == 1
+
+    rows_before = conn.execute("SELECT COUNT(*) FROM filings").fetchone()[0]
+
+    # Re-ingest the SAME original — must return the existing (superseded) id,
+    # not raise, and not insert a duplicate or un-supersede it.
+    reingested_id = write_filing(conn, dict(original), _clock)
+    assert reingested_id == orig_id
+
+    assert conn.execute("SELECT COUNT(*) FROM filings").fetchone()[0] == rows_before
+    assert conn.execute(
+        "SELECT is_superseded FROM filings WHERE id = ?", (orig_id,)
+    ).fetchone()["is_superseded"] == 1  # still superseded; re-ingest didn't revive it

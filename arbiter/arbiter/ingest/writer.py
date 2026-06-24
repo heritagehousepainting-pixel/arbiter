@@ -59,15 +59,22 @@ log = structlog.get_logger(__name__)
 # Accession index helpers
 # ---------------------------------------------------------------------------
 
+# Idempotency lookups intentionally match ANY existing row — superseded or not.
+# The UNIQUE index ``idx_filings_accession_txn`` spans superseded rows, so once
+# a filing is stored it permanently owns its ``(accession, txn_idx)`` slot. If
+# dedup filtered on ``is_superseded = 0``, re-ingesting a filing that an
+# amendment later superseded would miss the (superseded) row and attempt a
+# duplicate INSERT → ``UNIQUE constraint failed``. Re-ingest must be a no-op
+# that returns the existing id without un-superseding it.
 _ACCESSION_TXN_QUERY = """
     SELECT id FROM filings
-    WHERE accession = ? AND txn_idx = ? AND is_superseded = 0
+    WHERE accession = ? AND txn_idx = ?
     LIMIT 1
 """
 
 _ACCESSION_QUERY = """
     SELECT id FROM filings
-    WHERE accession = ? AND is_superseded = 0
+    WHERE accession = ?
     LIMIT 1
 """
 
