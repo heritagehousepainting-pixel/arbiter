@@ -53,6 +53,10 @@ DecideCallable = Callable[[FusionOutput, Idea], PaperOrder | None]
 #: Order submission callable: (order) → bool (True = success)
 SubmitCallable = Callable[[PaperOrder], bool]
 
+#: Options-expression callback: (fusion_output, idea) → None.  Runs AFTER the
+#: equity decide/submit for each idea (overlay; never affects the equity flow).
+ExpressCallable = Callable[[FusionOutput, Idea], None]
+
 
 # ---------------------------------------------------------------------------
 # Cycle result
@@ -103,6 +107,7 @@ def run_cycle(
     max_advisor_workers: int = 8,
     on_new_idea: Callable[[Idea], None] | None = None,
     on_transition: Callable[[Idea, IdeaState], None] | None = None,
+    express: ExpressCallable | None = None,
 ) -> CycleResult:
     """Run one full decision cycle.
 
@@ -265,61 +270,77 @@ def run_cycle(
             result.errors.append(msg)
             continue
 
-        # Advance GATHERING → PROVISIONAL_DECIDED
-        if idea.state is IdeaState.GATHERING:
-            transition(idea, IdeaState.PROVISIONAL_DECIDED)
-            _emit_transition(idea, IdeaState.PROVISIONAL_DECIDED)
-
-        # Decide
+        # The equity decide/submit block is wrapped in try/finally so the
+        # OPTIONS EXPRESSION overlay (``express``) runs AFTER equity handling for
+        # every idea that fused — even on the equity `continue`/`break` paths
+        # (a `continue`/`break` inside a `try` still runs its `finally`). The
+        # overlay is a strict no-op for the equity flow.
         try:
-            order = decide(fusion_output, idea)
-        except Exception as exc:  # noqa: BLE001
-            msg = f"Policy decision failed for idea {idea.idea_id}: {exc}"
-            logger.error(msg)
-            result.errors.append(msg)
-            continue
+            # Advance GATHERING → PROVISIONAL_DECIDED
+            if idea.state is IdeaState.GATHERING:
+                transition(idea, IdeaState.PROVISIONAL_DECIDED)
+                _emit_transition(idea, IdeaState.PROVISIONAL_DECIDED)
 
-        # Advance to FINAL_DECIDED
-        if idea.state is IdeaState.PROVISIONAL_DECIDED:
-            transition(idea, IdeaState.FINAL_DECIDED)
-            _emit_transition(idea, IdeaState.FINAL_DECIDED)
+            # Decide
+            try:
+                order = decide(fusion_output, idea)
+            except Exception as exc:  # noqa: BLE001
+                msg = f"Policy decision failed for idea {idea.idea_id}: {exc}"
+                logger.error(msg)
+                result.errors.append(msg)
+                continue
 
-        if order is None:
-            logger.info("Policy decided no trade for idea %s", idea.idea_id)
-            continue
+            # Advance to FINAL_DECIDED
+            if idea.state is IdeaState.PROVISIONAL_DECIDED:
+                transition(idea, IdeaState.FINAL_DECIDED)
+                _emit_transition(idea, IdeaState.FINAL_DECIDED)
 
-        # Submit
-        try:
-            success = submit(order)
-        except Exception as exc:  # noqa: BLE001
-            msg = f"Order submission failed for idea {idea.idea_id}: {exc}"
-            logger.error(msg)
-            result.errors.append(msg)
-            # A broker-fatal error latches the breaker; abort the REST of this
-            # cycle rather than letting another order slip through before the
-            # next gate read. (Name-checked to avoid importing the exec lane.)
-            if type(exc).__name__ == "BrokerError":
-                logger.error("Broker-fatal error — halting remaining submissions this cycle")
-                break
-            continue
+            if order is None:
+                logger.info("Policy decided no trade for idea %s", idea.idea_id)
+                continue
 
-        if success:
-            # Advance FINAL_DECIDED → EXECUTED → MONITORED
-            if idea.state is IdeaState.FINAL_DECIDED:
-                transition(idea, IdeaState.EXECUTED)
-                _emit_transition(idea, IdeaState.EXECUTED)
-                transition(idea, IdeaState.MONITORED)
-                _emit_transition(idea, IdeaState.MONITORED)
-            result.orders_submitted += 1
-            logger.info(
-                "Order submitted for idea %s (%s) — idea now MONITORED",
-                idea.idea_id,
-                idea.ticker,
-            )
-        else:
-            logger.warning(
-                "Order submission returned False for idea %s — not advancing state",
-                idea.idea_id,
-            )
+            # Submit
+            try:
+                success = submit(order)
+            except Exception as exc:  # noqa: BLE001
+                msg = f"Order submission failed for idea {idea.idea_id}: {exc}"
+                logger.error(msg)
+                result.errors.append(msg)
+                # A broker-fatal error latches the breaker; abort the REST of this
+                # cycle rather than letting another order slip through before the
+                # next gate read. (Name-checked to avoid importing the exec lane.)
+                if type(exc).__name__ == "BrokerError":
+                    logger.error("Broker-fatal error — halting remaining submissions this cycle")
+                    break
+                continue
+
+            if success:
+                # Advance FINAL_DECIDED → EXECUTED → MONITORED
+                if idea.state is IdeaState.FINAL_DECIDED:
+                    transition(idea, IdeaState.EXECUTED)
+                    _emit_transition(idea, IdeaState.EXECUTED)
+                    transition(idea, IdeaState.MONITORED)
+                    _emit_transition(idea, IdeaState.MONITORED)
+                result.orders_submitted += 1
+                logger.info(
+                    "Order submitted for idea %s (%s) — idea now MONITORED",
+                    idea.idea_id,
+                    idea.ticker,
+                )
+            else:
+                logger.warning(
+                    "Order submission returned False for idea %s — not advancing state",
+                    idea.idea_id,
+                )
+        finally:
+            # Options expression overlay — fail-safe; never disrupts the cycle.
+            if express is not None:
+                try:
+                    express(fusion_output, idea)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "Options express callback failed for idea %s: %s",
+                        idea.idea_id, exc,
+                    )
 
     return result

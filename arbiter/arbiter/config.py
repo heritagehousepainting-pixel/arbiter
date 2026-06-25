@@ -43,6 +43,7 @@ class ConfigError(Exception):
 
 # Allowed values for the executor_backend field (fail-closed on typos).
 _VALID_EXECUTOR_BACKENDS = {"sim", "alpaca_paper"}
+_VALID_OPTIONS_MODES = {"off", "shadow", "paper"}
 
 # [A3, P1] paper base url host allow-list (fail-closed).  Permit ONLY the real
 # Alpaca paper host or a loopback host (tests/mocks).  Anything else — notably a
@@ -107,6 +108,22 @@ _KNOWN_KEYS: dict[str, set[str]] = {
     "finnhub": {"api_key", "min_stance", "min_confidence"},
     "alerting": {"kill_switch_url", "alert_webhook_url"},
     "daemon": {"fast_interval_s", "full_cycle_times_et", "heartbeat_path"},
+    "options": {
+        "options_mode",
+        "options_sleeve_pct",
+        "option_target_delta_low",
+        "option_target_delta_high",
+        "option_min_expiry_days",
+        "option_horizon_buffer_days",
+        "option_max_expiry_buffer_days",
+        "option_min_open_interest",
+        "option_min_volume",
+        "option_conviction_mult",
+        "option_ivr_max",
+        "option_breakeven_buffer_pct",
+        "option_premium_stop_pct",
+        "option_data_feed",
+    },
 }
 
 
@@ -219,6 +236,77 @@ class Config:
     # Comma-separated 10-digit CIKs; None when unset.
     # Env var: FORM13F_MANAGER_CIKS
     form13f_manager_ciks: tuple[str, ...] | None = None
+
+    # -------------------------------------------------------------------------
+    # Options expression layer (P1 shadow → P2 paper).
+    # Default "off" → the entire layer is a no-op; zero behavioural change.
+    # Set options_mode = "shadow" to start logging would-have-traded rows.
+    # Set options_mode = "paper" (P2) to enable live Alpaca paper execution.
+    # Env var: OPTIONS_MODE
+    options_mode: str = "off"  # "off" | "shadow" | "paper"
+
+    # Budget: max aggregate premium at risk as a fraction of portfolio equity.
+    # 0.35 = options sleeve may hold up to 35% of portfolio value in premium.
+    # NOTE: actual market exposure is still bounded by delta-adjusted notional
+    # folded into the RiskBook gross/sector caps.
+    # Env var: OPTIONS_SLEEVE_PCT
+    options_sleeve_pct: float = 0.35
+
+    # Contract selector: target delta band for deep-ITM selection.
+    # Calls: delta ∈ [0.70, 0.80]; puts: |delta| ∈ [0.70, 0.80] (Alpaca sign-negates puts).
+    # Env vars: OPTION_TARGET_DELTA_LOW, OPTION_TARGET_DELTA_HIGH
+    option_target_delta_low: float = 0.70
+    option_target_delta_high: float = 0.80
+
+    # Minimum expiry in calendar days (hard floor — option must never expire
+    # during the thesis holding period).
+    # Env var: OPTION_MIN_EXPIRY_DAYS
+    option_min_expiry_days: int = 60
+
+    # Expiry selection: min_expiry = horizon_days + option_horizon_buffer_days
+    # (ensures the option lives at least this many days beyond the thesis horizon).
+    # Env var: OPTION_HORIZON_BUFFER_DAYS
+    option_horizon_buffer_days: int = 30
+
+    # Expiry selection: max_expiry = horizon_days + option_max_expiry_buffer_days
+    # (caps how far out we go; avoids extremely illiquid LEAPs).
+    # Env var: OPTION_MAX_EXPIRY_BUFFER_DAYS
+    option_max_expiry_buffer_days: int = 180
+
+    # Liquidity gate: open interest floor (contracts).
+    # Env var: OPTION_MIN_OPEN_INTEREST
+    option_min_open_interest: int = 100
+
+    # Liquidity gate: daily volume floor (contracts).
+    # Env var: OPTION_MIN_VOLUME
+    option_min_volume: int = 10
+
+    # Conviction gate multiplier: options require conviction ≥
+    # equity_entry_threshold × option_conviction_mult (default 1.5×).
+    # Env var: OPTION_CONVICTION_MULT
+    option_conviction_mult: float = 1.5
+
+    # IV gate: reject when IV rank > this threshold (0.40 = 40th percentile).
+    # In P1 cold-start, realized vol proxy is used when IVR history is absent.
+    # Env var: OPTION_IVR_MAX
+    option_ivr_max: float = 0.40
+
+    # Breakeven buffer: expected 1σ move must clear the option breakeven by
+    # at least this fraction (e.g. 0.05 = 5% buffer above breakeven).
+    # Env var: OPTION_BREAKEVEN_BUFFER_PCT
+    option_breakeven_buffer_pct: float = 0.05
+
+    # Premium stop: close a position when current premium ≤
+    # entry_premium × (1 - option_premium_stop_pct).
+    # Default 0.50 = close at −50% of premium paid.
+    # Env var: OPTION_PREMIUM_STOP_PCT
+    option_premium_stop_pct: float = 0.50
+
+    # Alpaca options data feed. "indicative" is the free feed (verified working,
+    # returns IV+greeks+quotes). "opra" is NOT available (no OPRA agreement).
+    # Do NOT change this to "opra" — it will 403 on every snapshot call.
+    # Env var: OPTION_DATA_FEED
+    option_data_feed: str = "indicative"
 
     def __repr__(self) -> str:
         """[J1, P1] Redacting repr — masks secrets so ``log.info(config)`` can't leak.
@@ -333,6 +421,7 @@ def load_config(config_path: Path | None = None) -> Config:
     finnhub = data.get("finnhub", {})
     alerting = data.get("alerting", {})
     daemon = data.get("daemon", {})
+    options = data.get("options", {})
 
     executor_backend = _env_str(
         "EXECUTOR_BACKEND", str(core.get("executor_backend", "sim"))
@@ -341,6 +430,15 @@ def load_config(config_path: Path | None = None) -> Config:
         raise ConfigError(
             f"Invalid executor_backend {executor_backend!r}; "
             f"must be one of {sorted(_VALID_EXECUTOR_BACKENDS)}"
+        )
+
+    options_mode = _env_str(
+        "OPTIONS_MODE", str(options.get("options_mode", "off"))
+    )
+    if options_mode not in _VALID_OPTIONS_MODES:
+        raise ConfigError(
+            f"Invalid options_mode {options_mode!r}; "
+            f"must be one of {sorted(_VALID_OPTIONS_MODES)}"
         )
 
     alpaca_paper_base_url = _env_str(
@@ -394,4 +492,45 @@ def load_config(config_path: Path | None = None) -> Config:
         form13f_first_filing_top_k=_env_int("FORM13F_FIRST_FILING_TOP_K", 5),
         form13f_max_conviction=_env_float("FORM13F_MAX_CONVICTION", 0.7),
         form13f_manager_ciks=_parse_form13f_manager_ciks(),
+        # Options expression layer
+        options_mode=options_mode,
+        options_sleeve_pct=_env_float(
+            "OPTIONS_SLEEVE_PCT", float(options.get("options_sleeve_pct", 0.35))
+        ),
+        option_target_delta_low=_env_float(
+            "OPTION_TARGET_DELTA_LOW", float(options.get("option_target_delta_low", 0.70))
+        ),
+        option_target_delta_high=_env_float(
+            "OPTION_TARGET_DELTA_HIGH", float(options.get("option_target_delta_high", 0.80))
+        ),
+        option_min_expiry_days=_env_int(
+            "OPTION_MIN_EXPIRY_DAYS", int(options.get("option_min_expiry_days", 60))
+        ),
+        option_horizon_buffer_days=_env_int(
+            "OPTION_HORIZON_BUFFER_DAYS", int(options.get("option_horizon_buffer_days", 30))
+        ),
+        option_max_expiry_buffer_days=_env_int(
+            "OPTION_MAX_EXPIRY_BUFFER_DAYS", int(options.get("option_max_expiry_buffer_days", 180))
+        ),
+        option_min_open_interest=_env_int(
+            "OPTION_MIN_OPEN_INTEREST", int(options.get("option_min_open_interest", 100))
+        ),
+        option_min_volume=_env_int(
+            "OPTION_MIN_VOLUME", int(options.get("option_min_volume", 10))
+        ),
+        option_conviction_mult=_env_float(
+            "OPTION_CONVICTION_MULT", float(options.get("option_conviction_mult", 1.5))
+        ),
+        option_ivr_max=_env_float(
+            "OPTION_IVR_MAX", float(options.get("option_ivr_max", 0.40))
+        ),
+        option_breakeven_buffer_pct=_env_float(
+            "OPTION_BREAKEVEN_BUFFER_PCT", float(options.get("option_breakeven_buffer_pct", 0.05))
+        ),
+        option_premium_stop_pct=_env_float(
+            "OPTION_PREMIUM_STOP_PCT", float(options.get("option_premium_stop_pct", 0.50))
+        ),
+        option_data_feed=_env_str(
+            "OPTION_DATA_FEED", str(options.get("option_data_feed", "indicative"))
+        ),
     )

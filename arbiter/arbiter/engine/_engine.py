@@ -794,6 +794,62 @@ class Engine:
                 audit_path=self.config.audit_path,
             )
 
+        # Options expression overlay (P1 shadow / P2 paper).  Strict no-op when
+        # config.options_mode == "off" (express_option early-returns).  Runs
+        # AFTER equity handling per idea; never folds delta into the live book in
+        # shadow mode (would change equity caps for later ideas this cycle).
+        _options_on = self.config.options_mode != "off"
+
+        def _open_options_premium() -> float:
+            """Aggregate premium of OPEN paper option positions (sleeve usage)."""
+            try:
+                return float(self.conn.execute(
+                    "SELECT COALESCE(SUM(p.entry_premium), 0) FROM option_positions p "
+                    "LEFT JOIN option_outcomes o "
+                    "  ON o.idea_id = p.idea_id AND o.occ_symbol = p.occ_symbol "
+                    "WHERE o.id IS NULL"
+                ).fetchone()[0])
+            except Exception:  # table absent / any error → treat as empty sleeve
+                return 0.0
+
+        def _bound_express(fusion: FusionOutput, idea: Idea) -> None:
+            from arbiter.options.express import express_option  # noqa: PLC0415
+
+            express_option(
+                self.conn,
+                idea,
+                fusion,
+                config=self.config,
+                book_container=_book,
+                clock=self.clock,
+                portfolio_equity=_equity_usd,
+                open_options_premium=_open_options_premium(),
+                current_price_provider=self.current_price_provider,
+            )
+
+        # Manage open PAPER option positions (premium-stop / horizon / reversal)
+        # BEFORE entries, so any closed position frees sleeve budget this cycle.
+        if _options_on and self.config.options_mode == "paper":
+            try:
+                from arbiter.options.alpaca_options_client import (  # noqa: PLC0415
+                    AlpacaOptionsClient,
+                )
+                from arbiter.options.manage import (  # noqa: PLC0415
+                    manage_option_positions,
+                )
+
+                _closed = manage_option_positions(
+                    self.conn,
+                    AlpacaOptionsClient(self.config),
+                    config=self.config,
+                    clock=now.isoformat(),
+                    current_conviction_for=None,
+                )
+                if _closed:
+                    log.info("options.manage.closed", count=len(_closed))
+            except Exception as exc:  # never disrupt the equity cycle
+                log.warning("options.manage.failed", error=str(exc))
+
         result = run_cycle(
             ideas=ideas,
             advisor_map=_opinion_provider_map(),
@@ -804,6 +860,7 @@ class Engine:
             active_ideas=active_ideas,
             on_new_idea=_on_new_idea,
             on_transition=_on_transition,
+            express=_bound_express if _options_on else None,
         )
 
         # If a broker-fatal event occurred during the cycle, mark the result.
