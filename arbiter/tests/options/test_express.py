@@ -129,6 +129,31 @@ def test_shadow_happy_path_writes_row():
     assert r["contracts_qty"] >= 1
     assert r["delta_adjusted_notional"] > 0
     assert r["catalyst_tag"] == "A1.activist"
+    # IV history built for the evaluated ticker.
+    assert conn.execute(
+        "SELECT COUNT(*) FROM option_iv_history WHERE underlying='AAPL'"
+    ).fetchone()[0] == 1
+
+
+def test_iv_snapshot_recorded_once_per_ticker_per_day():
+    conn = _conn()
+    cfg = _make_config()
+    # Two DIFFERENT ideas, same ticker + day → IV recorded once (deduped).
+    express_option(
+        conn, _idea(idea_id="01IDEAA000000000000000000A"), _fusion(),
+        config=cfg, book_container=[RiskBook({}, lambda t: "UNKNOWN")], clock=_Clock(),
+        portfolio_equity=100_000.0, open_options_premium=0.0,
+        current_price_provider=_FakePrice(230.0), client=_FakeClient(),
+    )
+    express_option(
+        conn, _idea(idea_id="01IDEAB000000000000000000B"), _fusion(),
+        config=cfg, book_container=[RiskBook({}, lambda t: "UNKNOWN")], clock=_Clock(),
+        portfolio_equity=100_000.0, open_options_premium=0.0,
+        current_price_provider=_FakePrice(230.0), client=_FakeClient(),
+    )
+    assert conn.execute(
+        "SELECT COUNT(*) FROM option_iv_history WHERE underlying='AAPL'"
+    ).fetchone()[0] == 1
 
 
 def test_low_conviction_rejected_no_row():

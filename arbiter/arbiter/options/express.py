@@ -26,6 +26,7 @@ from arbiter.config import Config
 from arbiter.options.alpaca_options_client import AlpacaOptionsClient, OptionsBrokerError
 from arbiter.options.contract_selector import select_contract
 from arbiter.options.gate import options_expression_gate
+from arbiter.options.iv_history import record_iv_snapshot
 from arbiter.options.positions import record_open_position
 from arbiter.options.shadow_log import log_shadow_option
 from arbiter.options.sizing import size_option
@@ -54,6 +55,19 @@ def _shadow_already_logged(conn: sqlite3.Connection, idea_id: str) -> bool:
     """True if this idea already has a shadow row (dedup across cycles)."""
     row = conn.execute(
         "SELECT 1 FROM option_shadow_log WHERE idea_id = ? LIMIT 1", (idea_id,)
+    ).fetchone()
+    return row is not None
+
+
+def _iv_recorded_today(conn: sqlite3.Connection, underlying: str, day: str) -> bool:
+    """True if an ATM-IV snapshot for ``underlying`` already exists for ``day``.
+
+    Caps IV recording at one snapshot per ticker per day (``day`` = ``YYYY-MM-DD``).
+    """
+    row = conn.execute(
+        "SELECT 1 FROM option_iv_history WHERE underlying = ? "
+        "AND substr(as_of, 1, 10) = ? LIMIT 1",
+        (underlying, day),
     ).fetchone()
     return row is not None
 
@@ -149,6 +163,17 @@ def express_option(
             config=config,
             as_of=now.date(),
         )
+        # Build IV history: one ATM-IV snapshot per ticker per day. Recorded
+        # AFTER select_contract so the SELECTOR's chain fetch is the clean first
+        # call — large chains (e.g. NVDA) degrade (null greeks) on a back-to-back
+        # second fetch, which would drop every candidate. The IV-rank gate is
+        # cold-start until ~30 days accumulate; this is what feeds it. Fail-safe.
+        if not _iv_recorded_today(conn, underlying, now.date().isoformat()):
+            try:
+                record_iv_snapshot(conn, client, underlying, as_of_iso)
+            except Exception as exc:
+                log.debug("options.express.iv_snapshot_failed", ticker=underlying, error=str(exc))
+
         if contract is None:
             log.info("options.express.no_contract", ticker=underlying)
             return None

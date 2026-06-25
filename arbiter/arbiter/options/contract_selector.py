@@ -111,6 +111,11 @@ def select_contract(
             min_expiry=min_expiry,
             max_expiry=max_expiry,
             side=gate_decision.side,
+            # A 5-month window on a liquid underlying spans hundreds of strikes
+            # (NVDA ~400 in-window). The default limit (100) truncates the chain
+            # and can cut off the deep-ITM 0.70-0.80 delta band entirely → a
+            # silent no_contract. Request enough to cover large chains.
+            limit=1500,
         )
     except Exception:  # noqa: BLE001
         log.warning("select_contract: fetch_chain() failed for %s", underlying, exc_info=True)
