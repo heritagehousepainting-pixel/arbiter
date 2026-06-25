@@ -87,9 +87,15 @@ def reconcile_pending_orders(engine: "Engine", now: datetime) -> None:
                     (new_status, float(report.filled_qty), order_id),
                 )
             else:
+                # FULL fill — also persist the broker-reported filled qty, NOT
+                # just the status.  A partial fill earlier this order's life
+                # writes the partial qty to the row (see the `partial` branch
+                # above); promoting to `filled` with status-only would leave
+                # that stale partial qty, so the reconciler perpetually sees
+                # local_qty < broker_qty (the BAC local=3/broker=4 QTY_MISMATCH).
                 engine.conn.execute(
-                    "UPDATE orders SET status = ? WHERE order_id = ?",
-                    (new_status, order_id),
+                    "UPDATE orders SET status = ?, qty = ? WHERE order_id = ?",
+                    (new_status, float(report.filled_qty), order_id),
                 )
             engine.conn.commit()
         except Exception as exc:  # noqa: BLE001

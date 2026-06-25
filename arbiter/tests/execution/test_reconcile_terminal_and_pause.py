@@ -117,3 +117,38 @@ class TestC4DurablePause:
         eng.resume()
         row = conn.execute("SELECT paused FROM engine_state WHERE id=1").fetchone()
         assert row["paused"] == 0
+
+
+def test_partial_then_full_fill_persists_filled_qty(tmp_path, monkeypatch):
+    """A BUY that partial-fills then fully fills must end at the broker's
+    filled_qty, not the stale partial qty.
+
+    Regression for the BAC local=3 / broker=4 QTY_MISMATCH: the partial branch
+    writes qty=3, and the full-fill promotion previously updated status only —
+    leaving qty=3 while the broker held 4. The reconciler then perpetually
+    flagged a 1-share divergence.
+    """
+    fake = FakeAlpaca(fill_mode="pending")
+    eng, conn = _build(tmp_path, monkeypatch, fake)
+    oid = "ORD-PF"
+    _seed_pending_order(conn, order_id=oid, ticker="BAC", side=OrderSide.BUY)
+
+    # Round 1 — broker reports a PARTIAL fill of 3 (of 4).
+    fake.orders[oid] = {
+        "id": oid, "symbol": "BAC", "qty": "4",
+        "filled_qty": "3", "filled_avg_price": "40.0", "status": "partial",
+    }
+    eng._reconcile_pending_orders(_AS_OF)
+    row = conn.execute("SELECT qty, status FROM orders WHERE order_id=?", (oid,)).fetchone()
+    assert row["status"] == "partial"
+    assert row["qty"] == 3.0  # partial qty persisted
+
+    # Round 2 — order now FULLY filled at 4.
+    fake.orders[oid] = {
+        "id": oid, "symbol": "BAC", "qty": "4",
+        "filled_qty": "4", "filled_avg_price": "40.0", "status": "filled",
+    }
+    eng._reconcile_pending_orders(_AS_OF)
+    row = conn.execute("SELECT qty, status FROM orders WHERE order_id=?", (oid,)).fetchone()
+    assert row["status"] == "filled"
+    assert row["qty"] == 4.0, "full-fill must persist broker filled_qty, not the stale partial qty"
