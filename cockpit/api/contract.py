@@ -168,6 +168,7 @@ class TickerDetail(BaseModel):
     symbol: str                              # always upper-cased
     name: str | None = None                  # from GET /v2/assets/{symbol}
     month_return_pct: float | None = None    # (latest_bar_close - oldest_bar_close) / oldest_bar_close
+    day_change_pct: float | None = None      # (latest_bar_close - prev_bar_close) / prev_bar_close
     current_price: float | None = None       # echoed from latest daily bar close
     as_of: str                               # UTC ISO timestamp of fetch
 

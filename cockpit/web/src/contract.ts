@@ -122,6 +122,7 @@ export interface TickerDetail {
   symbol: string;                    // always upper-cased
   name: string | null;               // from GET /v2/assets/{symbol}
   month_return_pct: number | null;   // (latest_bar_close - oldest_bar_close) / oldest_bar_close
+  day_change_pct: number | null;     // (latest_bar_close - prev_bar_close) / prev_bar_close
   current_price: number | null;      // echoed from latest daily bar close
   as_of: string;                     // UTC ISO timestamp of fetch
 }

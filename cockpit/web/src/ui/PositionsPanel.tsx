@@ -170,7 +170,7 @@ export function PositionsPanel() {
         })
         .catch(() => {
           detailCache.current.set(ticker, {
-            symbol: ticker, name: null, month_return_pct: null,
+            symbol: ticker, name: null, month_return_pct: null, day_change_pct: null,
             current_price: null, as_of: new Date().toISOString(),
           });
           setDetailMap(new Map(detailCache.current));

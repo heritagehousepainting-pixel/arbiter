@@ -30,6 +30,7 @@ const AMZN_DETAIL: TickerDetail = {
   symbol: "AMZN",
   name: "Amazon.com Inc.",
   month_return_pct: 0.0423,
+  day_change_pct: 0.0112,
   current_price: 234.16,
   as_of: "2026-06-26T00:00:00Z",
 };
@@ -38,6 +39,7 @@ const UBER_DETAIL: TickerDetail = {
   symbol: "UBER",
   name: "Uber Technologies Inc.",
   month_return_pct: -0.0152,
+  day_change_pct: -0.004,
   current_price: 71.82,
   as_of: "2026-06-26T00:00:00Z",
 };
@@ -277,7 +279,7 @@ describe("PositionsPanel", () => {
 
   it("null name renders as em-dash", async () => {
     mockFetchTicker.mockResolvedValueOnce({
-      symbol: "AMZN", name: null, month_return_pct: null,
+      symbol: "AMZN", name: null, month_return_pct: null, day_change_pct: null,
       current_price: null, as_of: "2026-06-26T00:00:00Z",
     } satisfies TickerDetail);
 

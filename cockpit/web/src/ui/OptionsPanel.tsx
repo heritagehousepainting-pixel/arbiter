@@ -9,13 +9,14 @@
  *
  * Polls /options every 5s.  IV history collapsed by default, toggle to expand.
  */
-import { useEffect, useState } from "react";
-import { fetchOptions } from "../api";
+import { Fragment, useRef, useEffect, useState } from "react";
+import { fetchOptions, fetchTickerDetail } from "../api";
 import type {
   OpenOptionPosition,
   OptionShadowPlay,
   OptionsMode,
   OptionsState,
+  TickerDetail,
 } from "../contract";
 import { theme } from "../theme/theme";
 
@@ -195,11 +196,73 @@ function StatsStrip({ data }: { data: OptionsState }) {
 // ---------------------------------------------------------------------------
 // Open option positions mini-table
 // ---------------------------------------------------------------------------
-function OpenPositionsTable({
+// Coloured signed percent — matches the trade-detail style ("+4.2%" green /
+// "-1.4%" red); the sign conveys direction, so no arrow.
+function PctChip({ frac }: { frac: number | null | undefined }) {
+  if (frac == null) return <span style={{ color: C.muted }}>—</span>;
+  return <span style={{ color: plColor(frac), fontWeight: 700 }}>{pct(frac)}</span>;
+}
+
+// Expanded tracking detail for one option (underlying live + since-open context).
+function OptionDetailRow({
+  p, detail, loading,
+}: {
+  p: OpenOptionPosition;
+  detail: TickerDetail | undefined;
+  loading: boolean;
+}) {
+  const cur = detail?.current_price ?? null;
+  const sinceOpen =
+    cur != null && p.underlying_open_price
+      ? (cur - p.underlying_open_price) / p.underlying_open_price
+      : null;
+  let moneyness: string | null = null;
+  if (cur != null) {
+    const intrinsic = p.side === "put" ? p.strike - cur : cur - p.strike;
+    moneyness = `${intrinsic >= 0 ? "ITM" : "OTM"} by ${usd(Math.abs(intrinsic))}`;
+  }
+  const lbl = { color: C.muted, minWidth: 58, display: "inline-block" } as const;
+  return (
+    <tr>
+      <td colSpan={7} style={{ padding: "1px 0 9px 14px" }}>
+        {loading ? (
+          <span style={{ color: C.muted, fontStyle: "italic", fontSize: 11 }}>loading…</span>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10.5, lineHeight: 1.5 }}>
+            <div style={{ color: C.text, fontWeight: 700, fontSize: 11.5 }}>
+              {detail?.name ?? p.underlying}
+            </div>
+            <div><span style={lbl}>Today</span>{cur != null ? usd(cur) : "—"} &nbsp;<PctChip frac={detail?.day_change_pct} /></div>
+            <div><span style={lbl}>1-Month</span><PctChip frac={detail?.month_return_pct} /></div>
+            <div style={{ color: C.muted, fontSize: 9, letterSpacing: 1, marginTop: 3 }}>SINCE YOU OPENED</div>
+            <div>
+              <span style={lbl}>Underlying</span>
+              {usd(p.underlying_open_price)} → {cur != null ? usd(cur) : "—"} &nbsp;<PctChip frac={sinceOpen} />
+            </div>
+            <div>
+              <span style={lbl}>Strike</span>
+              {usd(p.strike)}{moneyness ? ` · ${moneyness}` : ""} · Δ {fmt(p.delta_at_open, 2)}
+            </div>
+            <div>
+              <span style={lbl}>Entry</span>
+              {usd(p.entry_premium)} · conviction {fmt(p.original_conviction, 2)}
+            </div>
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+export function OpenPositionsTable({
   positions,
 }: {
   positions: OpenOptionPosition[];
 }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [detailMap, setDetailMap] = useState<Map<string, TickerDetail>>(new Map());
+  const detailCache = useRef<Map<string, TickerDetail>>(new Map());
+
   if (positions.length === 0) {
     return (
       <div style={{ color: C.muted, fontStyle: "italic", fontSize: 12 }}>
@@ -207,6 +270,26 @@ function OpenPositionsTable({
       </div>
     );
   }
+
+  const handleToggle = (p: OpenOptionPosition) => {
+    const collapse = openId === p.id;
+    setOpenId(collapse ? null : p.id);
+    if (!collapse && !detailCache.current.has(p.underlying)) {
+      fetchTickerDetail(p.underlying)
+        .then((d) => {
+          detailCache.current.set(p.underlying, d);
+          setDetailMap(new Map(detailCache.current));
+        })
+        .catch(() => {
+          // cache an empty detail so the row degrades to "—" instead of spinning
+          detailCache.current.set(p.underlying, {
+            symbol: p.underlying, name: null, month_return_pct: null,
+            day_change_pct: null, current_price: null, as_of: "",
+          });
+          setDetailMap(new Map(detailCache.current));
+        });
+    }
+  };
 
   return (
     <div style={{ overflowX: "auto" as const }}>
@@ -232,10 +315,21 @@ function OpenPositionsTable({
         <tbody>
           {positions.map((p) => {
             const pl = p.unrealized_pl;
+            const isOpen = openId === p.id;
             return (
-              <tr key={p.id} style={{ borderTop: C.border }}>
-                <td style={{ padding: "3px 6px 3px 0", color: C.amber, fontWeight: 600 }}>
-                  {contractLabel(p)}
+              <Fragment key={p.id}>
+              <tr style={{ borderTop: C.border }}>
+                <td style={{ padding: "3px 6px 3px 0" }}>
+                  <button
+                    onClick={() => handleToggle(p)}
+                    aria-expanded={isOpen}
+                    style={{
+                      background: "none", border: 0, padding: 0, cursor: "pointer",
+                      color: C.amber, fontWeight: 600, fontFamily: C.mono, fontSize: 11,
+                    }}
+                  >
+                    {isOpen ? "▾" : "▸"} {contractLabel(p)}
+                  </button>
                 </td>
                 <td style={{ padding: "3px 6px 3px 0" }}>
                   <span
@@ -278,6 +372,14 @@ function OpenPositionsTable({
                   {usd(pl, true)}
                 </td>
               </tr>
+              {isOpen && (
+                <OptionDetailRow
+                  p={p}
+                  detail={detailMap.get(p.underlying)}
+                  loading={!detailMap.has(p.underlying)}
+                />
+              )}
+              </Fragment>
             );
           })}
         </tbody>

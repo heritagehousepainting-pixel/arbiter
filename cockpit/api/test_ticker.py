@@ -266,6 +266,39 @@ class TestTickerDetail:
         assert detail.current_price == pytest.approx(112.0, abs=1e-6)
         assert detail.as_of  # non-empty
 
+    def test_day_change_uses_last_two_bars_distinct_from_month(self):
+        """day_change_pct = (latest − prev close)/prev; month uses the oldest bar."""
+        bars = {"bars": [
+            {"t": "2026-05-22T04:00:00Z", "c": 100.0},  # ~1-month reference
+            {"t": "2026-06-24T04:00:00Z", "c": 110.0},  # yesterday
+            {"t": "2026-06-25T04:00:00Z", "c": 112.0},  # latest
+        ], "symbol": "MS", "next_page_token": None}
+
+        def http_get(url, headers):
+            return _ASSET_FIXTURE if "/v2/assets/" in url else bars
+
+        with patch("arbiter.config.load_config", return_value=_mock_cfg()), \
+             patch("arbiter.engine.build_executor", return_value=_make_mock_ex(http_get)):
+            from cockpit.api.ticker import build_ticker_detail
+            detail = build_ticker_detail("MS")
+
+        assert detail.day_change_pct == pytest.approx((112.0 - 110.0) / 110.0, abs=1e-6)
+        assert detail.month_return_pct == pytest.approx((112.0 - 100.0) / 100.0, abs=1e-6)
+
+    def test_day_change_null_when_fewer_than_two_bars(self):
+        one_bar = {"bars": [{"t": "2026-06-25T04:00:00Z", "c": 112.0}], "next_page_token": None}
+
+        def http_get(url, headers):
+            return _ASSET_FIXTURE if "/v2/assets/" in url else one_bar
+
+        with patch("arbiter.config.load_config", return_value=_mock_cfg()), \
+             patch("arbiter.engine.build_executor", return_value=_make_mock_ex(http_get)):
+            from cockpit.api.ticker import build_ticker_detail
+            detail = build_ticker_detail("MS")
+
+        assert detail.day_change_pct is None
+        assert detail.month_return_pct is None
+
     def test_symbol_is_upper_cased(self):
         """Any casing of input symbol → TickerDetail.symbol is upper."""
         def http_get(url, headers):

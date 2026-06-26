@@ -77,6 +77,7 @@ def build_ticker_detail(symbol: str) -> TickerDetail:
 
     # --- 1-month bars via data API -------------------------------------------
     month_return_pct: float | None = None
+    day_change_pct: float | None = None
     current_price: float | None = None
     try:
         start_iso = (datetime.now(timezone.utc) - timedelta(days=35)).strftime("%Y-%m-%d")
@@ -90,17 +91,22 @@ def build_ticker_detail(symbol: str) -> TickerDetail:
 
         if len(bars) >= 2:
             ref_close = _f((bars[0] or {}).get("c"))
+            prev_close = _f((bars[-2] or {}).get("c"))
             latest_close = _f((bars[-1] or {}).get("c"))
             if ref_close is not None and ref_close > 0 and latest_close is not None:
                 month_return_pct = (latest_close - ref_close) / ref_close
                 current_price = latest_close
+            # day change = latest close vs the prior day's close
+            if prev_close is not None and prev_close > 0 and latest_close is not None:
+                day_change_pct = (latest_close - prev_close) / prev_close
     except Exception:
-        pass  # month fields stay None
+        pass  # month/day fields stay None
 
     return TickerDetail(
         symbol=sym,
         name=name,
         month_return_pct=month_return_pct,
+        day_change_pct=day_change_pct,
         current_price=current_price,
         as_of=_now(),
     )
