@@ -547,6 +547,24 @@ export function OptionsPanel({ inspectionOpen }: OptionsPanelProps) {
     if (data?.options_mode === "off") setOpen(false);
   }, [data?.options_mode]);
 
+  // Occlusion guard #2 — horizontal overlap with the top-center Positions panel.
+  // That panel is 560px wide, centered (`left:50%`), so its right edge is at
+  // `50vw + 280`; this panel's left edge is at `100vw - 448` (width 400, right 48).
+  // They overlap once `50vw + 280 > 100vw - 448`, i.e. below ~1456px wide.  When
+  // that happens we cap the body so the panel's top stays clear of the Positions
+  // panel's worst-case footprint (its 60vh scroll cap) instead of rising under it.
+  const [vw, setVw] = useState<number>(
+    typeof window !== "undefined" ? window.innerWidth : 1512,
+  );
+  useEffect(() => {
+    const onResize = () => setVw(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  // top = vh - 84(container bottom) - 36(header) - body; require it ≥ 16 + 60vh + 12
+  // gap → body ≤ 40vh - 148px.  Above the threshold the original 52vh is used.
+  const bodyMaxHeight = vw < 1456 ? "calc(40vh - 148px)" : "52vh";
+
   const mode = data?.options_mode ?? "off";
   const nOpen = data?.n_open ?? 0;
   const isPaper = mode === "paper";
@@ -629,7 +647,7 @@ export function OptionsPanel({ inspectionOpen }: OptionsPanelProps) {
       {open && (
         <div
           style={{
-            maxHeight: "52vh",
+            maxHeight: bodyMaxHeight,
             overflowY: "auto" as const,
             padding: "8px 12px 14px",
           }}
