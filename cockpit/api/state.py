@@ -405,6 +405,79 @@ def _infra_intensities(hb: dict | None) -> dict[str, NodeState]:
     }
 
 
+def _option_position_nodes(
+    conn: sqlite3.Connection,
+) -> tuple[list[Node], list[Edge], dict[str, NodeState]]:
+    """Open option positions → amber 'options'-cluster nodes wired into the brain.
+
+    Openness = an ``option_positions`` row with NO matching ``option_outcomes``
+    row (mirrors arbiter/options/positions.py). Each becomes a node connected by
+    ``opt.layer →(submits)→ option`` (always present, so never dangling) and, when
+    its idea is on-screen, ``idea →(fuses)→ option``.
+    """
+    nodes: list[Node] = []
+    edges: list[Edge] = []
+    states: dict[str, NodeState] = {}
+    try:
+        rows = conn.execute(
+            """
+            SELECT p.id, p.underlying, p.occ_symbol, p.side, p.strike, p.expiry,
+                   p.contracts_qty, p.entry_premium, p.delta_at_open, p.idea_id
+            FROM option_positions p
+            LEFT JOIN option_outcomes o
+              ON o.idea_id = p.idea_id AND o.occ_symbol = p.occ_symbol
+            WHERE o.id IS NULL
+            ORDER BY p.open_ts DESC
+            """,
+        ).fetchall()
+    except Exception:
+        return nodes, edges, states
+
+    today = _utcnow().date()
+    for r in rows:
+        rid = str(r["id"])
+        nid = f"option_position.{rid}"
+        cp = "C" if str(r["side"]).lower() == "call" else "P"
+        strike = r["strike"]
+        try:
+            strike_lbl = str(int(strike)) if float(strike).is_integer() else str(strike)
+        except (TypeError, ValueError):
+            strike_lbl = str(strike)
+        dte: int | None = None
+        try:
+            dte = (datetime.fromisoformat(str(r["expiry"])[:10]).date() - today).days
+        except (TypeError, ValueError):
+            dte = None
+        qty = int(r["contracts_qty"] or 0)
+        nodes.append(Node(
+            id=nid, type="engine_part", label=f"{r['underlying']} {strike_lbl}{cp}",
+            cluster="options",
+            meta={
+                "underlying": str(r["underlying"]),
+                "occ_symbol": str(r["occ_symbol"] or ""),
+                "side": str(r["side"] or ""),
+                "strike": strike,
+                "contracts_qty": qty,
+                "entry_premium": r["entry_premium"],
+                "delta_at_open": r["delta_at_open"],
+                "dte": dte,
+                "idea_id": str(r["idea_id"] or ""),
+            },
+        ))
+        states[nid] = NodeState(intensity=0.7, status="paper", value=float(qty))
+        # opt.layer opened it (opt.layer is a static node → never dangling)
+        edges.append(Edge(
+            id=f"e.opt.express.{rid[:8]}", source="opt.layer", target=nid, kind="submits",
+        ))
+        # the thesis it expresses (kept only if that idea node is on-screen → filtered below)
+        if r["idea_id"]:
+            edges.append(Edge(
+                id=f"e.opt.idea.{rid[:8]}", source=f"idea.{r['idea_id']}",
+                target=nid, kind="fuses",
+            ))
+    return nodes, edges, states
+
+
 def _dynamic_flow_edges(conn: sqlite3.Connection) -> tuple[list[Node], list[Edge]]:
     """Build the live flow graph:
     - figure → its advisor (via filing source)
@@ -573,16 +646,33 @@ def build_state(conn: sqlite3.Connection) -> State:
     idea_nodes, idea_edges = _live_idea_nodes(conn)
     account, trade_nodes, trade_edges, alpaca_ok = _alpaca_snapshot()
     flow_nodes, flow_edges = _dynamic_flow_edges(conn)
+    opt_nodes, opt_edges, opt_states = _option_position_nodes(conn)
+    nodes.update(opt_states)
 
     # Deduplicate dynamic nodes by id (flow_nodes may overlap with trade_nodes)
     all_dynamic: dict[str, Node] = {}
-    for n in idea_nodes + trade_nodes + flow_nodes:
+    for n in idea_nodes + trade_nodes + flow_nodes + opt_nodes:
         all_dynamic[n.id] = n
 
     # Deduplicate dynamic edges by id
     all_dyn_edges: dict[str, Edge] = {}
-    for e in idea_edges + trade_edges + flow_edges:
+    for e in idea_edges + trade_edges + flow_edges + opt_edges:
         all_dyn_edges[e.id] = e
+
+    # Drop dangling edges: a dynamic-typed endpoint (idea/trade/outcome/option)
+    # that isn't actually rendered would draw a line to nowhere (and skew the
+    # hover-trace). Static-typed endpoints (advisors, core/exec/infra/src, opt.layer,
+    # figures) always exist in the graph backbone, so they pass through.
+    _DYN_PREFIXES = ("idea.", "trade.", "outcome.", "option_position.")
+    _dyn_ids = set(all_dynamic.keys())
+
+    def _endpoint_ok(nid: str) -> bool:
+        return nid in _dyn_ids if nid.startswith(_DYN_PREFIXES) else True
+
+    all_dyn_edges = {
+        eid: e for eid, e in all_dyn_edges.items()
+        if _endpoint_ok(e.source) and _endpoint_ok(e.target)
+    }
 
     return State(
         nodes=nodes,

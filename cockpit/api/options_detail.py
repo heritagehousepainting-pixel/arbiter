@@ -114,3 +114,41 @@ def build_options_node_detail(conn: sqlite3.Connection) -> NodeDetail:
         },
         rows=rows,
     )
+
+
+def build_option_position_detail(
+    conn: sqlite3.Connection, position_id: str,
+) -> NodeDetail | None:
+    """NodeDetail for a single open option-position node (option_position.<id>).
+
+    Reuses ``_list_open_positions`` so the dte / current-mid / unrealized-P&L are
+    computed identically to the OptionsPanel. Returns None (→ 404) if the id isn't
+    an open position.
+    """
+    for p in _list_open_positions(conn):
+        if p.id != position_id:
+            continue
+        cp = "C" if str(p.side).lower() == "call" else "P"
+        try:
+            strike_lbl = str(int(p.strike)) if float(p.strike).is_integer() else str(p.strike)
+        except (TypeError, ValueError):
+            strike_lbl = str(p.strike)
+        return NodeDetail(
+            id=f"option_position.{position_id}",
+            type="engine_part",
+            label=f"{p.underlying} {strike_lbl}{cp}",
+            summary={
+                "underlying": p.underlying,
+                "occ_symbol": p.occ_symbol,
+                "side": p.side,
+                "strike": p.strike,
+                "contracts_qty": p.contracts_qty,
+                "entry_premium": p.entry_premium,
+                "delta_at_open": p.delta_at_open,
+                "dte": p.dte,
+                "unrealized_pl": p.unrealized_pl,
+                "idea_id": p.idea_id,
+            },
+            rows=[],
+        )
+    return None

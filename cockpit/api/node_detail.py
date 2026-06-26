@@ -21,7 +21,7 @@ import sys
 
 from .contract import NodeDetail, NodeType
 from .db import DEFAULT_DB_PATH
-from .options_detail import build_options_node_detail
+from .options_detail import build_option_position_detail, build_options_node_detail
 from .state import _heartbeat
 
 _ARBITER_PKG_ROOT = DEFAULT_DB_PATH.parents[1]  # <repo>/arbiter
@@ -639,6 +639,10 @@ def build_node_detail(conn: sqlite3.Connection, node_id: str) -> NodeDetail | No
         if node_id != "opt.layer":
             return None
         return build_options_node_detail(conn)
+
+    # --- open option position ---
+    if prefix == "option_position":
+        return build_option_position_detail(conn, node_id[len("option_position."):])
 
     # Unknown prefix → 404
     return None

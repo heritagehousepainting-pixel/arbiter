@@ -153,6 +153,16 @@ def build_graph(conn: sqlite3.Connection) -> Graph:
                       target="exec.adapter", kind="submits"))
     edges.append(Edge(id="e.exec.monitor", source="exec.adapter",
                       target="exec.exit_monitor", kind="decides"))
+    # Wire up nodes that were previously free-hanging (no edges):
+    #   • Alpaca market data feeds the execution adapter (live prices + orders)
+    #   • the reconciler reconciles the adapter's fills against the ledger
+    #   • the safety/watchdog layer fires alerts (ntfy)
+    edges.append(Edge(id="e.ingest.alpaca.adapter", source="src.alpaca",
+                      target="exec.adapter", kind="ingest"))
+    edges.append(Edge(id="e.resolve.adapter.reconciler", source="exec.adapter",
+                      target="exec.reconciler", kind="resolves"))
+    edges.append(Edge(id="e.alert.safety", source="core.safety",
+                      target="infra.alerting", kind="gates"))
     # infra gating the core
     edges.append(Edge(id="e.gate.kill", source="infra.killswitch",
                       target="core.safety", kind="gates"))

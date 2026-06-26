@@ -26,7 +26,7 @@ NodeType = Literal[
 ]
 Cluster = Literal[
     "sources", "figures", "council", "core", "ideas",
-    "execution", "market", "learning", "infra",
+    "execution", "market", "learning", "infra", "options",
 ]
 EdgeKind = Literal[
     "ingest",     # data source → advisor

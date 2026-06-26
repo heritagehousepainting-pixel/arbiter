@@ -63,18 +63,26 @@ function plColor(v: number | null | undefined): string {
   return v >= 0 ? C.green : C.red;
 }
 
-// Format OCC-style contract label: underlying + strike + C/P + expiry MM/DD
+// Format an ISO expiry "2027-06-17" → "06/17/27" (MM/DD/YY). The YEAR is kept
+// on purpose: the options layer trades long-dated LEAPS (often ~1yr out), so a
+// bare "06/17" reads as already-expired. Degrades safely on bad input.
+export function fmtExpiry(iso: string | null | undefined): string {
+  if (!iso) return "?";
+  const [y, m, d] = iso.split("-");
+  if (!y || !m || !d) return iso;
+  return `${m}/${d}/${y.slice(2)}`;
+}
+
+// Format OCC-style contract label: underlying + strike + C/P + expiry MM/DD/YY
 function contractLabel(p: OpenOptionPosition): string {
   const cp = p.side === "call" ? "C" : "P";
-  const expiry = p.expiry ? p.expiry.slice(5).replace("-", "/") : "?";
-  return `${p.underlying} ${p.strike}${cp} ${expiry}`;
+  return `${p.underlying} ${p.strike}${cp} ${fmtExpiry(p.expiry)}`;
 }
 
 function shadowContractLabel(p: OptionShadowPlay): string {
   if (!p.strike || !p.expiry || !p.side) return p.underlying;
   const cp = p.side === "call" ? "C" : "P";
-  const expiry = p.expiry.slice(5).replace("-", "/");
-  return `${p.underlying} ${p.strike}${cp} ${expiry}`;
+  return `${p.underlying} ${p.strike}${cp} ${fmtExpiry(p.expiry)}`;
 }
 
 // ---------------------------------------------------------------------------
