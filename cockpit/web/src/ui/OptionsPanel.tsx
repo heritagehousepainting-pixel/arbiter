@@ -307,8 +307,8 @@ export function OpenPositionsTable({
             <th style={{ textAlign: "left" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Side</th>
             <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Δ</th>
             <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Qty</th>
-            <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Entry</th>
             <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>DTE</th>
+            <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>ROI</th>
             <th style={{ textAlign: "right" as const, padding: "2px 0 4px 0", fontWeight: 600 }}>P&L</th>
           </tr>
         </thead>
@@ -355,11 +355,15 @@ export function OpenPositionsTable({
                 <td style={{ padding: "3px 6px 3px 0", textAlign: "right" as const, color: C.text }}>
                   {p.contracts_qty}
                 </td>
-                <td style={{ padding: "3px 6px 3px 0", textAlign: "right" as const, color: C.text }}>
-                  {usd(p.entry_premium)}
-                </td>
                 <td style={{ padding: "3px 6px 3px 0", textAlign: "right" as const, color: C.muted }}>
                   {p.dte ?? "—"}
+                </td>
+                <td style={{
+                  padding: "3px 6px 3px 0", textAlign: "right" as const,
+                  color: p.unrealized_pl_pct == null ? C.muted : plColor(p.unrealized_pl_pct),
+                  fontWeight: 700,
+                }}>
+                  {pct(p.unrealized_pl_pct)}
                 </td>
                 <td
                   style={{

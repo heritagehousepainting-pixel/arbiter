@@ -223,6 +223,42 @@ def option_fixture_db(tmp_path: Path) -> Generator[str, None, None]:
         os.environ["COCKPIT_DB_PATH"] = original
 
 
+def test_open_position_roi_from_indicative_mid(option_fixture_db):
+    """A live indicative mid → real P&L $ and ROI %; no mid → None (degrades)."""
+    from cockpit.api import options as opt_mod
+    from cockpit.api.db import connect
+
+    # fixture pos: AAPL qty 2, entry $500. mid 6.0 → value 6*100*2=1200 → +700 / +140%
+    with patch.object(opt_mod, "_fetch_option_mids",
+                      return_value={"AAPL260117C00200000": 6.0}):
+        conn = connect(option_fixture_db)
+        positions = opt_mod._list_open_positions(conn)
+        conn.close()
+
+    aapl = next(p for p in positions if p.occ_symbol == "AAPL260117C00200000")
+    assert aapl.current_mid == 6.0
+    assert aapl.unrealized_pl == pytest.approx(700.0)
+    assert aapl.unrealized_pl_pct == pytest.approx(1.4)
+    # a contract the snapshot didn't price → fields stay None
+    msft = next(p for p in positions if p.occ_symbol == "MSFT260117C00400000")
+    assert msft.current_mid is None
+    assert msft.unrealized_pl is None
+
+
+def test_open_position_roi_none_when_snapshot_unavailable(option_fixture_db):
+    """Snapshot feed down (→ {}) leaves P&L/ROI None so the panel shows '—'."""
+    from cockpit.api import options as opt_mod
+    from cockpit.api.db import connect
+
+    with patch.object(opt_mod, "_fetch_option_mids", return_value={}):
+        conn = connect(option_fixture_db)
+        positions = opt_mod._list_open_positions(conn)
+        conn.close()
+
+    assert positions
+    assert all(p.unrealized_pl is None and p.current_mid is None for p in positions)
+
+
 @pytest.fixture()
 def option_client(option_fixture_db: str) -> Generator[TestClient, None, None]:
     """TestClient for options tests; Alpaca patched offline."""

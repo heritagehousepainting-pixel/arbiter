@@ -25,6 +25,47 @@ from .contract import (
     OptionsMode,
     OptionsState,
 )
+from .db import DEFAULT_DB_PATH
+
+_ARBITER_PKG_ROOT = DEFAULT_DB_PATH.parents[1]  # <repo>/arbiter
+
+
+def _fetch_option_mids(occ_symbols: list[str]) -> dict[str, float]:
+    """Best-effort current mid per OCC symbol via the FREE indicative options feed.
+
+    Mirrors arbiter/options/manage.py: mid = (bid+ask)/2 (else bid or ask).  This
+    is an *indicative* mark (wide spreads), not a guaranteed fill.  Returns {} on
+    any failure so the panel degrades to "—".  Read-only (snapshot GET only).
+    """
+    if not occ_symbols:
+        return {}
+    try:
+        import sys  # noqa: PLC0415
+        if str(_ARBITER_PKG_ROOT) not in sys.path:
+            sys.path.insert(0, str(_ARBITER_PKG_ROOT))
+        from arbiter.config import load_config  # noqa: PLC0415
+        from arbiter.options.alpaca_options_client import AlpacaOptionsClient  # noqa: PLC0415
+
+        client = AlpacaOptionsClient(load_config())
+        snap_map = client.snapshot(occ_symbols)
+    except Exception:
+        return {}
+
+    mids: dict[str, float] = {}
+    for occ, snap in (snap_map or {}).items():
+        if not isinstance(snap, dict):
+            continue
+        bid, ask = snap.get("bid"), snap.get("ask")
+        mid: float | None = None
+        if bid and ask:
+            mid = (float(bid) + float(ask)) / 2.0
+        elif bid:
+            mid = float(bid)
+        elif ask:
+            mid = float(ask)
+        if mid is not None and mid > 0:
+            mids[str(occ)] = mid
+    return mids
 
 
 def _now() -> str:
@@ -91,6 +132,9 @@ def _list_open_positions(conn: sqlite3.Connection) -> list[OpenOptionPosition]:
     except Exception:
         return []
 
+    # Live (indicative) mark per contract → real ROI $ and %.
+    mids = _fetch_option_mids([str(r["occ_symbol"]) for r in rows])
+
     positions: list[OpenOptionPosition] = []
     for r in rows:
         expiry_str = str(r["expiry"])
@@ -100,6 +144,16 @@ def _list_open_positions(conn: sqlite3.Connection) -> list[OpenOptionPosition]:
             dte = (expiry_date - today).days
         except Exception:
             pass
+
+        qty = int(r["contracts_qty"])
+        entry = float(r["entry_premium"])
+        mid = mids.get(str(r["occ_symbol"]))
+        unrealized_pl: float | None = None
+        unrealized_pl_pct: float | None = None
+        if mid is not None and mid > 0:
+            current_value = mid * 100.0 * qty   # option premium is per-share ×100
+            unrealized_pl = current_value - entry
+            unrealized_pl_pct = (unrealized_pl / entry) if entry else None
 
         positions.append(OpenOptionPosition(
             id=str(r["id"]),
@@ -118,9 +172,9 @@ def _list_open_positions(conn: sqlite3.Connection) -> list[OpenOptionPosition]:
             original_conviction=float(r["original_conviction"]),
             open_ts=str(r["open_ts"]),
             dte=dte,
-            current_mid=None,     # requires live option price feed; not in DB
-            unrealized_pl=None,
-            unrealized_pl_pct=None,
+            current_mid=mid,
+            unrealized_pl=unrealized_pl,
+            unrealized_pl_pct=unrealized_pl_pct,
         ))
     return positions
 
