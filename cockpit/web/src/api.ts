@@ -2,7 +2,9 @@
 import type {
   CockpitEvent,
   Graph,
+  IVSeries,
   NodeDetail,
+  OptionsState,
   PositionsResponse,
   State,
 } from "./contract";
@@ -19,6 +21,8 @@ export const fetchGraph = () => get<Graph>("/graph");
 export const fetchState = () => get<State>("/state");
 export const fetchNode = (id: string) => get<NodeDetail>(`/node/${encodeURIComponent(id)}`);
 export const fetchPositions = () => get<PositionsResponse>("/positions");
+export const fetchOptions = () => get<OptionsState>("/options");
+export const fetchIvSeries = (ticker: string) => get<IVSeries>(`/options/iv/${encodeURIComponent(ticker)}`);
 
 /** Subscribe to the live SSE event stream (Lane 2 implements /events). */
 export function subscribeEvents(onEvent: (e: CockpitEvent) => void): () => void {

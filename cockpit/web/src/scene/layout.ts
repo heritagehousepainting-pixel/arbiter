@@ -43,6 +43,7 @@ export const CLUSTER_ANCHOR: Record<Cluster, [number, number, number]> = {
   market:    [ 42,  -1,  2],   // crystallized trades
   learning:  [  2,  20,  5],   // feedback loop, up high
   infra:     [ -2, -18, -5],
+  options:   [ 28, -14, -4],   // below Execution — options expression layer (amber zone)
 };
 
 // Radii of intra-cluster spread (world units) — figures are dense, core tight
@@ -56,6 +57,7 @@ const CLUSTER_SPREAD: Record<Cluster, number> = {
   market:    4.5,
   learning:  4.0,
   infra:     4.0,
+  options:   4.5,   // typically 2-5 option position nodes
 };
 
 // ─── Seeded LCG PRNG ────────────────────────────────────────────────────────

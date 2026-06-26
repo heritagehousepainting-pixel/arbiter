@@ -7,7 +7,7 @@ export type NodeType =
 
 export type Cluster =
   | "sources" | "figures" | "council" | "core" | "ideas"
-  | "execution" | "market" | "learning" | "infra";
+  | "execution" | "market" | "learning" | "infra" | "options";
 
 export type EdgeKind =
   | "ingest" | "discloses" | "scores" | "fuses" | "decides"
@@ -117,6 +117,100 @@ export interface PositionsResponse {
   alpaca_ok: boolean;
 }
 
+// --- Options layer -----------------------------------------------------------
+export type OptionsMode = "off" | "shadow" | "paper";
+
+export interface OpenOptionPosition {
+  id: string;
+  idea_id: string;
+  underlying: string;
+  occ_symbol: string;
+  side: "call" | "put";
+  strike: number;
+  expiry: string;
+  contracts_qty: number;
+  entry_premium: number;
+  delta_at_open: number | null;
+  iv_at_open: number | null;
+  underlying_open_price: number;
+  thesis_horizon_date: string;
+  original_conviction: number;
+  open_ts: string;
+  dte: number | null;
+  current_mid: number | null;
+  unrealized_pl: number | null;
+  unrealized_pl_pct: number | null;
+}
+
+export interface OptionShadowPlay {
+  id: string;
+  idea_id: string;
+  underlying: string;
+  as_of: string;
+  gate_express: boolean;
+  gate_reason: string;
+  side: "call" | "put" | null;
+  occ_symbol: string | null;
+  strike: number | null;
+  expiry: string | null;
+  delta: number | null;
+  iv: number | null;
+  est_premium: number | null;
+  delta_adjusted_notional: number | null;
+  contracts_qty: number | null;
+  conviction: number;
+  horizon_days: number;
+  catalyst_tag: string | null;
+  ivr_estimate: number | null;
+  created_at: string;
+}
+
+export interface OptionOutcomeRecord {
+  id: string;
+  idea_id: string;
+  underlying: string;
+  occ_symbol: string;
+  side: "call" | "put";
+  open_ts: string;
+  close_ts: string;
+  close_reason: string;
+  entry_premium: number;
+  exit_premium: number;
+  option_pl_pct: number;
+  underlying_alpha_bps: number;
+  delta_at_open: number | null;
+  iv_at_open: number | null;
+  iv_at_close: number | null;
+  contracts_qty: number;
+  created_at: string;
+}
+
+export interface IVPoint {
+  as_of: string;
+  atm_iv: number;
+  occ_symbol: string;
+}
+
+export interface IVSeries {
+  underlying: string;
+  points: IVPoint[];
+  current_iv_rank: number | null;
+  as_of: string;
+}
+
+export interface OptionsState {
+  options_mode: OptionsMode;
+  open_positions: OpenOptionPosition[];
+  recent_shadow_plays: OptionShadowPlay[];
+  recent_outcomes: OptionOutcomeRecord[];
+  n_open: number;
+  sleeve_used_pct: number | null;
+  win_rate: number | null;
+  avg_option_pl_pct: number | null;
+  avg_underlying_alpha_bps: number | null;
+  as_of: string;
+}
+
 // Cluster → accent color (lane 5 may refine into proper design tokens).
 export const CLUSTER_COLOR: Record<Cluster, string> = {
   sources: "#5b8cff",
@@ -128,4 +222,5 @@ export const CLUSTER_COLOR: Record<Cluster, string> = {
   market: "#ffffff",
   learning: "#80ed99",
   infra: "#8d99ae",
+  options: "#f9a825",   // deep amber — options / volatility layer
 };

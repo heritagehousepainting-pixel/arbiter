@@ -11,11 +11,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from .contract import Graph, Health, NodeDetail, PositionsResponse, State
+from .contract import Graph, Health, IVSeries, NodeDetail, OptionsState, PositionsResponse, State
 from .db import connect, db_reachable
 from .events import event_stream
 from .graph import build_graph
 from .node_detail import build_node_detail
+from .options import build_iv_series, build_options_state
 from .positions import build_positions
 from .state import _heartbeat, build_state
 
@@ -75,3 +76,23 @@ def events() -> StreamingResponse:
 def positions() -> PositionsResponse:
     """Live open positions + portfolio stats (read-only, from Alpaca)."""
     return build_positions()
+
+
+@app.get("/options", response_model=OptionsState)
+def options() -> OptionsState:
+    """Complete options snapshot — mode, open positions, shadow plays, outcomes, aggregates."""
+    conn = connect()
+    try:
+        return build_options_state(conn)
+    finally:
+        conn.close()
+
+
+@app.get("/options/iv/{ticker}", response_model=IVSeries)
+def options_iv(ticker: str) -> IVSeries:
+    """ATM-IV history for one underlying ticker.  Returns empty series (never 404)."""
+    conn = connect()
+    try:
+        return build_iv_series(conn, ticker)
+    finally:
+        conn.close()

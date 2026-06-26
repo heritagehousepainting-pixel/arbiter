@@ -109,6 +109,23 @@ vi.mock("../../api", () => ({
       alpaca_ok: true,
     }),
   ),
+  fetchOptions: vi.fn(() =>
+    Promise.resolve({
+      options_mode: "off",
+      open_positions: [],
+      recent_shadow_plays: [],
+      recent_outcomes: [],
+      n_open: 0,
+      sleeve_used_pct: null,
+      win_rate: null,
+      avg_option_pl_pct: null,
+      avg_underlying_alpha_bps: null,
+      as_of: "2026-06-26T00:00:00Z",
+    }),
+  ),
+  fetchIvSeries: vi.fn(() =>
+    Promise.resolve({ underlying: "AAPL", points: [], current_iv_rank: null, as_of: "2026-06-26T00:00:00Z" }),
+  ),
   subscribeEvents: vi.fn(() => () => {}),
 }));
 
@@ -448,9 +465,9 @@ describe("Walkthrough", () => {
       openBtn.click();
     });
 
-    // Step 1 of 8 shown initially
+    // Step 1 of 9 shown initially (9 steps: 8 original + opt.layer step)
     const panel = container.querySelector("[data-testid='walkthrough-panel']")!;
-    expect(panel.textContent).toContain("1 / 8");
+    expect(panel.textContent).toContain("1 / 9");
 
     // Click Next
     const nextBtn = Array.from(panel.querySelectorAll("button")).find((b) =>
@@ -460,7 +477,7 @@ describe("Walkthrough", () => {
       nextBtn.click();
     });
 
-    expect(panel.textContent).toContain("2 / 8");
+    expect(panel.textContent).toContain("2 / 9");
   });
 
   it("sets walkthroughStep + focusCluster in store on start", async () => {

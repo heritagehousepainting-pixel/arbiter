@@ -322,6 +322,63 @@ def _exec_part_intensities(conn: sqlite3.Connection, hb: dict | None) -> dict[st
     }
 
 
+def _options_node_intensity(conn: sqlite3.Connection) -> dict[str, NodeState]:
+    """Intensity for opt.layer from OPTIONS_MODE env + 7-day shadow_log activity.
+
+    options_mode source: shared ``options._options_mode()`` (os.environ, then the
+    arbiter .env the daemon loaded).  If it says "off" but shadow rows exist
+    recently, we trust the DB activity (env may have changed without a restart).
+    """
+    from .options import _options_mode  # noqa: PLC0415
+
+    options_mode = _options_mode()
+
+    cutoff = (_utcnow() - timedelta(days=7)).isoformat()
+    try:
+        shadow_count = conn.execute(
+            "SELECT COUNT(*) FROM option_shadow_log WHERE as_of >= ?",
+            (cutoff,),
+        ).fetchone()[0]
+    except Exception:
+        shadow_count = 0
+
+    try:
+        open_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM option_positions p
+            LEFT JOIN option_outcomes o
+                ON o.idea_id = p.idea_id AND o.occ_symbol = p.occ_symbol
+            WHERE o.id IS NULL
+            """,
+        ).fetchone()[0]
+    except Exception:
+        open_count = 0
+
+    # If env says off but DB shows activity, promote to shadow
+    effective_mode = options_mode
+    if effective_mode == "off" and shadow_count > 0:
+        effective_mode = "shadow"
+
+    if effective_mode == "off":
+        intensity = 0.05
+        status = "off"
+    elif effective_mode == "shadow":
+        intensity = min(1.0, 0.3 + 0.05 * shadow_count)
+        status = "shadow"
+    else:  # paper
+        intensity = min(1.0, 0.7 + 0.1 * open_count)
+        status = "paper"
+
+    return {
+        "opt.layer": NodeState(
+            intensity=intensity,
+            status=status,
+            value=float(open_count),
+            label_extra=f"{shadow_count} shadow (7d)",
+        )
+    }
+
+
 def _infra_intensities(hb: dict | None) -> dict[str, NodeState]:
     """Infra cluster: daemon + kill switch + alerting from heartbeat."""
     daemon_ok = hb is not None
@@ -508,6 +565,9 @@ def build_state(conn: sqlite3.Connection) -> State:
 
     # --- infra intensities (daemon/kill-switch/alerting) ---
     nodes.update(_infra_intensities(hb))
+
+    # --- options layer intensity (OPTIONS_MODE env + shadow_log activity) ---
+    nodes.update(_options_node_intensity(conn))
 
     # --- dynamic nodes/edges ---
     idea_nodes, idea_edges = _live_idea_nodes(conn)

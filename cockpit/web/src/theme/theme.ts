@@ -147,6 +147,7 @@ export const CLUSTER_ACCENT: Record<Cluster, {
   market:    { base: "#e7ecff", glow: "#e7ecff60", dim: "#2a2d3a", emissive: 0.3 },
   learning:  { base: "#80ed99", glow: "#80ed9980", dim: "#0d3020", emissive: 0.45 },
   infra:     { base: "#8d99ae", glow: "#8d99ae60", dim: "#1a1e28", emissive: 0.25 },
+  options:   { base: "#f9a825", glow: "#f9a82580", dim: "#3d2800", emissive: 0.45 },
 };
 
 // ── Glow material helper — scene/ui can spread this onto meshStandardMaterial ─

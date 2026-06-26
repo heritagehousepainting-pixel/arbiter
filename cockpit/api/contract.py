@@ -160,3 +160,106 @@ class PositionsResponse(BaseModel):
     portfolio: Portfolio = Portfolio()
     as_of: str
     alpaca_ok: bool = False
+
+
+# --- Options layer -------------------------------------------------------
+OptionsMode = Literal["off", "shadow", "paper"]
+
+
+class OpenOptionPosition(BaseModel):
+    """One live open option position (option_positions row with no matching outcome)."""
+    id: str                                    # ULID PK from option_positions
+    idea_id: str
+    underlying: str                            # equity ticker, e.g. "AAPL"
+    occ_symbol: str                            # OCC symbol
+    side: str                                  # "call" | "put"
+    strike: float
+    expiry: str                                # ISO date string
+    contracts_qty: int
+    entry_premium: float                       # total USD premium paid to open
+    delta_at_open: float | None = None
+    iv_at_open: float | None = None
+    underlying_open_price: float
+    thesis_horizon_date: str                   # ISO date string
+    original_conviction: float
+    open_ts: str                               # UTC ISO timestamp
+    # Computed fields (None when live price unavailable from DB)
+    dte: int | None = None
+    current_mid: float | None = None           # live mid-price (not stored in DB)
+    unrealized_pl: float | None = None
+    unrealized_pl_pct: float | None = None
+
+
+class OptionShadowPlay(BaseModel):
+    """One row from option_shadow_log — a would-have-traded evaluation."""
+    id: str
+    idea_id: str
+    underlying: str
+    as_of: str
+    gate_express: bool                         # True = gate fired (would have traded)
+    gate_reason: str                           # "OK" | "IV_RANK_TOO_HIGH" | etc.
+    side: str | None = None                    # "call" | "put" | None
+    occ_symbol: str | None = None
+    strike: float | None = None
+    expiry: str | None = None
+    delta: float | None = None
+    iv: float | None = None
+    est_premium: float | None = None
+    delta_adjusted_notional: float | None = None
+    contracts_qty: int | None = None
+    conviction: float
+    horizon_days: float
+    catalyst_tag: str | None = None
+    ivr_estimate: float | None = None
+    created_at: str
+
+
+class OptionOutcomeRecord(BaseModel):
+    """One closed option trade — display-only, isolated from equity learning."""
+    id: str
+    idea_id: str
+    underlying: str
+    occ_symbol: str
+    side: str
+    open_ts: str
+    close_ts: str
+    close_reason: str
+    entry_premium: float
+    exit_premium: float
+    option_pl_pct: float         # (exit - entry) / entry; display only, NOT advisory trust
+    underlying_alpha_bps: float
+    delta_at_open: float | None = None
+    iv_at_open: float | None = None
+    iv_at_close: float | None = None
+    contracts_qty: int
+    created_at: str
+
+
+class IVPoint(BaseModel):
+    """One ATM-IV data point for a single underlying."""
+    as_of: str
+    atm_iv: float                # annualised, decimal (0.38 = 38%)
+    occ_symbol: str
+
+
+class IVSeries(BaseModel):
+    """IV history series for one underlying ticker."""
+    underlying: str
+    points: list[IVPoint] = []
+    current_iv_rank: float | None = None   # IVR ∈ [0,1]; None when <30 data points
+    as_of: str
+
+
+class OptionsState(BaseModel):
+    """Complete options data snapshot, served at GET /options."""
+    options_mode: OptionsMode = "off"
+    open_positions: list[OpenOptionPosition] = []
+    recent_shadow_plays: list[OptionShadowPlay] = []   # last 20, mixed express/reject
+    recent_outcomes: list[OptionOutcomeRecord] = []    # last 20 closed trades
+    # Aggregates (None when no data yet)
+    n_open: int = 0
+    sleeve_used_pct: float | None = None               # requires account equity; None offline
+    win_rate: float | None = None
+    avg_option_pl_pct: float | None = None
+    avg_underlying_alpha_bps: float | None = None
+    as_of: str

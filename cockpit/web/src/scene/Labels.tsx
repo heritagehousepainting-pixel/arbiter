@@ -23,6 +23,7 @@ const ZONE_NAME: Record<Cluster, string> = {
   market: "TRADES",
   learning: "LEARNING LOOP",
   infra: "INFRA",
+  options: "OPTIONS",
 };
 
 const LABEL_TYPES = new Set<NodeType>([
@@ -51,7 +52,7 @@ export function ZoneLabels() {
           >
             <div
               style={{
-                color: c === "core" ? "#ff8fa8" : "#6b7694",
+                color: c === "core" ? "#ff8fa8" : c === "options" ? "#f9a825" : "#6b7694",
                 fontSize: 13,
                 fontWeight: 800,
                 letterSpacing: 3,

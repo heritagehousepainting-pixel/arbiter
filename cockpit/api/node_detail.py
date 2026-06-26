@@ -21,6 +21,7 @@ import sys
 
 from .contract import NodeDetail, NodeType
 from .db import DEFAULT_DB_PATH
+from .options_detail import build_options_node_detail
 from .state import _heartbeat
 
 _ARBITER_PKG_ROOT = DEFAULT_DB_PATH.parents[1]  # <repo>/arbiter
@@ -567,6 +568,7 @@ _NODE_TYPES: dict[str, NodeType] = {
     "core": "engine_part",
     "exec": "exec_part",
     "infra": "infra",
+    "opt": "engine_part",
 }
 
 
@@ -631,6 +633,12 @@ def build_node_detail(conn: sqlite3.Connection, node_id: str) -> NodeDetail | No
         if node_id not in known_infra:
             return None
         return _infra_detail(node_id)
+
+    # --- options layer ---
+    if prefix == "opt":
+        if node_id != "opt.layer":
+            return None
+        return build_options_node_detail(conn)
 
     # Unknown prefix → 404
     return None

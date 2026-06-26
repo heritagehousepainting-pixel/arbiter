@@ -20,6 +20,7 @@ import {
   type State,
 } from "../contract";
 import { theme } from "../theme/theme";
+import { OptionsPanel } from "./OptionsPanel";
 import { PositionsPanel } from "./PositionsPanel";
 import { useCockpitStore } from "./store";
 
@@ -490,7 +491,130 @@ function GenericDetail({ detail }: { detail: NodeDetail }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// opt.layer node detail
+// ---------------------------------------------------------------------------
+function OptLayerDetail({ detail }: { detail: NodeDetail }) {
+  const s = detail.summary as Record<string, unknown>;
+  const mode = String(s.options_mode ?? s.mode ?? "—");
+  const nOpen = s.n_open_positions ?? s.n_open ?? null;
+  const sleeveUsed = s.sleeve_used_pct ?? null;
+  const modeColor =
+    mode === "paper" ? "#f9a825" : mode === "shadow" ? T.muted : T.muted;
+
+  return (
+    <>
+      <SectionTitle>Options Layer</SectionTitle>
+      <KV k="mode" v={<span style={{ color: modeColor, fontWeight: 600, textTransform: "uppercase" as const }}>{mode}</span>} />
+      {nOpen != null && <KV k="open positions" v={String(nOpen)} />}
+      {sleeveUsed != null && (
+        <KV k="sleeve used" v={`${(Number(sleeveUsed) * 100).toFixed(0)}%`} />
+      )}
+      {detail.rows.length > 0 && (
+        <>
+          <SectionTitle>Recent Activity</SectionTitle>
+          <MiniTable
+            rows={detail.rows}
+            cols={[
+              { key: "underlying", label: "Ticker" },
+              { key: "gate_reason", label: "Gate" },
+              {
+                key: "conviction",
+                render: (v) => (v != null ? Number(v).toFixed(2) : "—"),
+                label: "Conv",
+              },
+              {
+                key: "created_at",
+                render: (v) => String(v ?? "—").slice(0, 10),
+                label: "Date",
+              },
+            ]}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// option_position.* node detail
+// ---------------------------------------------------------------------------
+function OptionPositionDetail({ detail }: { detail: NodeDetail }) {
+  const s = detail.summary as Record<string, unknown>;
+  const pl = s.unrealized_pl as number | null | undefined;
+  const plFormatted =
+    pl != null
+      ? `${pl >= 0 ? "+" : ""}$${Math.abs(pl).toFixed(2)}`
+      : "—";
+  const plColor = pl == null ? T.muted : pl >= 0 ? T.green : T.red;
+
+  return (
+    <>
+      <SectionTitle>Option Position</SectionTitle>
+      <KV k="underlying" v={String(s.underlying ?? s.ticker ?? "—")} />
+      <KV k="contract" v={String(s.occ_symbol ?? "—")} />
+      <KV k="side" v={String(s.side ?? "—")} />
+      <KV k="contracts" v={String(s.contracts_qty ?? s.qty ?? "—")} />
+      <KV k="entry premium" v={s.entry_premium != null ? `$${Number(s.entry_premium).toFixed(2)}` : "—"} />
+      <KV k="delta" v={s.delta_at_open != null ? Number(s.delta_at_open).toFixed(3) : "—"} />
+      <KV k="DTE" v={s.dte != null ? String(s.dte) : "—"} />
+      <KV k="unrealized P&L" v={plFormatted} vColor={plColor} />
+      {s.idea_id && (
+        <>
+          <SectionTitle>Origin</SectionTitle>
+          <KV k="idea" v={String(s.idea_id)} />
+        </>
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// option_outcome.* node detail
+// ---------------------------------------------------------------------------
+function OptionOutcomeDetail({ detail }: { detail: NodeDetail }) {
+  const s = detail.summary as Record<string, unknown>;
+  const optPl = s.option_pl_pct as number | null | undefined;
+  const alphaBps = s.underlying_alpha_bps as number | null | undefined;
+  const optPlColor = optPl == null ? T.muted : optPl >= 0 ? T.green : T.red;
+  const alphaColor = alphaBps == null ? T.muted : alphaBps >= 0 ? T.green : T.red;
+
+  return (
+    <>
+      <SectionTitle>Option Outcome</SectionTitle>
+      <KV k="underlying" v={String(s.underlying ?? "—")} />
+      <KV k="contract" v={String(s.occ_symbol ?? "—")} />
+      <KV k="side" v={String(s.side ?? "—")} />
+      <KV k="close reason" v={String(s.close_reason ?? "—")} />
+      <SectionTitle>P&L</SectionTitle>
+      <KV
+        k="option P&L %"
+        v={optPl != null ? `${optPl >= 0 ? "+" : ""}${(optPl * 100).toFixed(1)}%` : "—"}
+        vColor={optPlColor}
+      />
+      <KV
+        k="underlying alpha (bps)"
+        v={alphaBps != null ? `${alphaBps >= 0 ? "+" : ""}${alphaBps.toFixed(1)}` : "—"}
+        vColor={alphaColor}
+      />
+      <KV k="entry premium" v={s.entry_premium != null ? `$${Number(s.entry_premium).toFixed(2)}` : "—"} />
+      <KV k="exit premium" v={s.exit_premium != null ? `$${Number(s.exit_premium).toFixed(2)}` : "—"} />
+      {s.idea_id && (
+        <>
+          <SectionTitle>Origin</SectionTitle>
+          <KV k="idea" v={String(s.idea_id)} />
+        </>
+      )}
+    </>
+  );
+}
+
 function TypedDetail({ detail }: { detail: NodeDetail }) {
+  // Check node id prefix before type, so opt.layer / option_* get dedicated views
+  if (detail.id === "opt.layer") return <OptLayerDetail detail={detail} />;
+  if (detail.id.startsWith("option_position.")) return <OptionPositionDetail detail={detail} />;
+  if (detail.id.startsWith("option_outcome.")) return <OptionOutcomeDetail detail={detail} />;
+
   switch (detail.type as NodeType) {
     case "figure":
       return <FigureDetail detail={detail} />;
@@ -765,6 +889,7 @@ const CLUSTER_LABELS: Record<Cluster, string> = {
   market: "Live Trades",
   learning: "Outcomes / Learning",
   infra: "Infrastructure",
+  options: "Options Expression",
 };
 
 const NODE_TYPE_DESCRIPTIONS: Partial<Record<NodeType, string>> = {
@@ -1048,6 +1173,13 @@ function buildWalkthrough(graph: Graph | undefined, state: State | null): WalkSt
         "The execution adapter submits the order to Alpaca — once the kill-switch and circuit-breaker gates pass.",
     },
     {
+      nodeId: "opt.layer",
+      label: "A4 · Options",
+      clusterHint: "options",
+      narration:
+        "When conviction is high and IV-rank allows, the options expression layer papers or executes a matched option position — a leveraged expression of the same thesis, tracked separately from equity.",
+    },
+    {
       nodeId: trade?.id ?? null,
       label: trade ? trade.label : "a live trade",
       clusterHint: "market",
@@ -1103,10 +1235,9 @@ function Walkthrough({ path }: { path: WalkStep[] }) {
   return (
     <div
       style={{
-        position: "absolute",
-        bottom: 84,
-        right: 48,
         fontFamily: T.fontSans,
+        width: "fit-content",
+        alignSelf: "flex-end",
       }}
     >
       {!open && (
@@ -1320,7 +1451,23 @@ export function CockpitUI({
         visible={legendVisible}
         onToggle={() => setLegendVisible((v) => !v)}
       />
-      <Walkthrough path={walkPath} />
+      {/* Right-column container: OptionsPanel (bottom) + Walkthrough (above it).
+          flex-direction: column-reverse means DOM order = bottom→top in the visual stack.
+          Children listed: OptionsPanel first (renders at bottom), Walkthrough second (above). */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: 84,
+          right: 48,
+          display: "flex",
+          flexDirection: "column-reverse",
+          gap: 8,
+          alignItems: "flex-end",
+        }}
+      >
+        <OptionsPanel inspectionOpen={!!effectiveSelectedId} />
+        <Walkthrough path={walkPath} />
+      </div>
       {effectiveSelectedId && (
         <InspectionPanel
           id={effectiveSelectedId}

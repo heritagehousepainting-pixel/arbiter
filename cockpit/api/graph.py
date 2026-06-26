@@ -40,6 +40,8 @@ _EXEC_PARTS = [
     ("exec.exit_monitor", "Exit monitor (long+short)"),
     ("exec.reconciler", "Reconciler"),
 ]
+# Options layer node — execution-path waypoint, NOT an advisor
+_OPT_LAYER = ("opt.layer", "Options Layer")
 _INFRA = [
     ("infra.daemon", "Market-hours daemon"),
     ("infra.killswitch", "Kill switch"),
@@ -118,6 +120,12 @@ def build_graph(conn: sqlite3.Connection) -> Graph:
         nodes.append(Node(id=cid, type="engine_part", label=label, cluster="core"))
     for eid, label in _EXEC_PARTS:
         nodes.append(Node(id=eid, type="exec_part", label=label, cluster="execution"))
+    # Options layer — engine_part in the execution cluster (waypoint, not advisor)
+    nodes.append(Node(
+        id=_OPT_LAYER[0], type="engine_part", label=_OPT_LAYER[1],
+        cluster="execution",
+        meta={"zone": "OPTIONS", "zone_color": "#f9a825", "position": [28, -14, -4]},
+    ))
     for iid, label in _INFRA:
         nodes.append(Node(id=iid, type="infra", label=label, cluster="infra"))
 
@@ -137,6 +145,11 @@ def build_graph(conn: sqlite3.Connection) -> Graph:
         edges.append(Edge(id=f"e.dec.{a}.{b}", source=a, target=b, kind="decides"))
     # core → execution → market (submits/holds)
     edges.append(Edge(id="e.sub.core.adapter", source="core.safety",
+                      target="exec.adapter", kind="submits"))
+    # options layer: core.safety →decides→ opt.layer →submits→ exec.adapter
+    edges.append(Edge(id="e.dec.core.opt", source="core.safety",
+                      target="opt.layer", kind="decides"))
+    edges.append(Edge(id="e.sub.opt.adapter", source="opt.layer",
                       target="exec.adapter", kind="submits"))
     edges.append(Edge(id="e.exec.monitor", source="exec.adapter",
                       target="exec.exit_monitor", kind="decides"))
