@@ -11,13 +11,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from .contract import Graph, Health, IVSeries, NodeDetail, OptionsState, PositionsResponse, State
+from .contract import Graph, Health, IVSeries, NodeDetail, OptionsState, PositionsResponse, State, TickerDetail
 from .db import connect, db_reachable
 from .events import event_stream
 from .graph import build_graph
 from .node_detail import build_node_detail
 from .options import build_iv_series, build_options_state
 from .positions import build_positions
+from .ticker import build_ticker_detail
 from .state import _heartbeat, build_state
 
 app = FastAPI(title="Arbiter Cockpit API", version="0.1.0")
@@ -76,6 +77,12 @@ def events() -> StreamingResponse:
 def positions() -> PositionsResponse:
     """Live open positions + portfolio stats (read-only, from Alpaca)."""
     return build_positions()
+
+
+@app.get("/ticker/{symbol}", response_model=TickerDetail)
+def ticker_detail(symbol: str) -> TickerDetail:
+    """Company name + 1-month return for one ticker (lazy, per-expand, read-only)."""
+    return build_ticker_detail(symbol.strip().upper())
 
 
 @app.get("/options", response_model=OptionsState)

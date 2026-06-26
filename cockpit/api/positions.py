@@ -65,6 +65,7 @@ def build_positions() -> PositionsResponse:
             ticker=ticker, side=side, qty=abs(qty_signed), avg_entry=avg_entry,
             current_price=current, market_value=mv, cost_basis=abs(cost_basis or 0.0),
             unrealized_pl=upl, unrealized_pl_pct=upl_pct,
+            day_change_pct=_f(p.get("change_today")),
         ))
         if side == "long":
             n_long += 1

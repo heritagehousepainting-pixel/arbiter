@@ -94,6 +94,7 @@ export interface OpenPosition {
   cost_basis: number | null;
   unrealized_pl: number | null;
   unrealized_pl_pct: number | null; // ROI as a fraction (e.g. -0.012)
+  day_change_pct: number | null;    // day % as a fraction (e.g. 0.0099 = 0.99 %)
 }
 
 export interface Portfolio {
@@ -115,6 +116,14 @@ export interface PositionsResponse {
   portfolio: Portfolio;
   as_of: string;
   alpaca_ok: boolean;
+}
+
+export interface TickerDetail {
+  symbol: string;                    // always upper-cased
+  name: string | null;               // from GET /v2/assets/{symbol}
+  month_return_pct: number | null;   // (latest_bar_close - oldest_bar_close) / oldest_bar_close
+  current_price: number | null;      // echoed from latest daily bar close
+  as_of: string;                     // UTC ISO timestamp of fetch
 }
 
 // --- Options layer -----------------------------------------------------------

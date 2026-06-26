@@ -7,6 +7,7 @@ import type {
   OptionsState,
   PositionsResponse,
   State,
+  TickerDetail,
 } from "./contract";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8910";
@@ -23,6 +24,8 @@ export const fetchNode = (id: string) => get<NodeDetail>(`/node/${encodeURICompo
 export const fetchPositions = () => get<PositionsResponse>("/positions");
 export const fetchOptions = () => get<OptionsState>("/options");
 export const fetchIvSeries = (ticker: string) => get<IVSeries>(`/options/iv/${encodeURIComponent(ticker)}`);
+export const fetchTickerDetail = (symbol: string) =>
+  get<TickerDetail>(`/ticker/${encodeURIComponent(symbol)}`);
 
 /** Subscribe to the live SSE event stream (Lane 2 implements /events). */
 export function subscribeEvents(onEvent: (e: CockpitEvent) => void): () => void {

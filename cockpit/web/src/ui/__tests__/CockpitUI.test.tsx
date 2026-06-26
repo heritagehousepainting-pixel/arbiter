@@ -109,6 +109,7 @@ vi.mock("../../api", () => ({
       alpaca_ok: true,
     }),
   ),
+  fetchTickerDetail: vi.fn(() => Promise.resolve({ symbol: "X", name: null, month_return_pct: null, current_price: null, as_of: "2026-06-26T00:00:00Z" })),
   fetchOptions: vi.fn(() =>
     Promise.resolve({
       options_mode: "off",

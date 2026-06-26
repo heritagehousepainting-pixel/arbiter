@@ -138,6 +138,7 @@ class OpenPosition(BaseModel):
     cost_basis: float | None = None    # |qty| * avg_entry
     unrealized_pl: float | None = None       # $ (broker-signed; loss<0)
     unrealized_pl_pct: float | None = None   # ROI as a fraction (e.g. -0.012)
+    day_change_pct: float | None = None      # day % as a fraction (e.g. 0.0099 = 0.99 %)
 
 
 class Portfolio(BaseModel):
@@ -160,6 +161,15 @@ class PositionsResponse(BaseModel):
     portfolio: Portfolio = Portfolio()
     as_of: str
     alpaca_ok: bool = False
+
+
+class TickerDetail(BaseModel):
+    """Company name + 1-month return for one held ticker (lazy, per-expand)."""
+    symbol: str                              # always upper-cased
+    name: str | None = None                  # from GET /v2/assets/{symbol}
+    month_return_pct: float | None = None    # (latest_bar_close - oldest_bar_close) / oldest_bar_close
+    current_price: float | None = None       # echoed from latest daily bar close
+    as_of: str                               # UTC ISO timestamp of fetch
 
 
 # --- Options layer -------------------------------------------------------
