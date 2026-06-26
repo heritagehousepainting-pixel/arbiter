@@ -22,7 +22,7 @@ import type { Cluster, Graph, Node, State } from "../contract";
 import { useCockpitStore } from "../ui/store";
 import { DynamicEdges, StaticEdges } from "./EdgeLines";
 import { NodeLabels, ZoneLabels } from "./Labels";
-import { computeLayout, mergeLayout } from "./layout";
+import { computeLayout } from "./layout";
 import { FigureInstances } from "./NodeInstances";
 import { NodeMesh } from "./NodeMesh";
 import { PulseLayer } from "./PulseLayer";
@@ -133,23 +133,34 @@ export function SceneRoot({
   // Track which node IDs we have already laid out
   const laidOutIds = useRef(new Set<string>());
 
+  // layoutG is the global zone scale (computed with posMap, synced to state after)
+  const layoutGRef = useRef<number>(1);
+  const [layoutG, setLayoutG] = useState<number>(1);
+
   useEffect(() => {
     const currentIds = new Set(allNodes.map((n) => n.id));
     const hasNew = [...currentIds].some((id) => !laidOutIds.current.has(id));
     if (!hasNew) return;
 
     setPosMap((prev) => {
-      const next = mergeLayout(prev, allNodes, allEdges);
-      // Also handle the first load where prev is empty
-      if (prev.size === 0 && allNodes.length > 0) {
-        const full = computeLayout(allNodes, allEdges);
-        laidOutIds.current = new Set(allNodes.map((n) => n.id));
-        return full;
-      }
-      laidOutIds.current = currentIds;
-      return next;
+      // Full run on first load; warm-start (fewer ticks) for incremental growth
+      const ticks = prev.size === 0 ? 200 : 80;
+      const { positions, G: newG } = computeLayout(allNodes, allEdges, {
+        initial: prev.size > 0 ? prev : undefined,
+        ticks,
+      });
+      layoutGRef.current = newG;
+      return positions;
     });
+    // Mark these IDs as laid out OUTSIDE the updater (updaters can run twice in
+    // concurrent mode); this effect body runs once per dependency change.
+    laidOutIds.current = currentIds;
   }, [allNodes, allEdges]);
+
+  // Sync G ref to state whenever posMap changes (G and posMap always computed together)
+  useEffect(() => {
+    setLayoutG(layoutGRef.current);
+  }, [posMap]);
 
   // ── Split nodes by rendering strategy ───────────────────────────────────
   const figureNodes = useMemo(
@@ -162,6 +173,26 @@ export function SceneRoot({
   );
 
   const nodeStates = state?.nodes ?? {};
+
+  // Camera framing target — the labeled "spine" (data sources → council → core →
+  // execution → trades). The big UNLABELED banks (figures, ideas) are excluded so
+  // the camera frames the readable flow up close and the banks bleed toward the
+  // edges (orbit/zoom to see them all). This matches the loved close view.
+  // Exclude the LEFT-side banks (figures + their data sources) and the big ideas
+  // bank from the framing box: those are the horizontal extremes, so dropping them
+  // lets the camera zoom into the council→core→execution→trades flow while the
+  // figure bank bleeds off the left edge.
+  const SPINE_EXCLUDE = useMemo(() => new Set<Cluster>(["figures", "ideas", "sources"]), []);
+  const framePositions = useMemo(() => {
+    const m = new Map<string, [number, number, number]>();
+    for (const n of allNodes) {
+      if (SPINE_EXCLUDE.has(n.cluster)) continue;
+      const p = posMap.get(n.id);
+      if (p) m.set(n.id, p);
+    }
+    // Fallback to the full map before the first layout settles.
+    return m.size > 0 ? m : posMap;
+  }, [allNodes, posMap, SPINE_EXCLUDE]);
 
   // id → cluster, so edges can be colored by their endpoints (not a flat red).
   const nodeCluster = useMemo(() => {
@@ -227,8 +258,8 @@ export function SceneRoot({
       )}
 
       {/* Zone + key-node labels (legibility) */}
-      <ZoneLabels />
-      {posMap.size > 0 && <NodeLabels nodes={allNodes} positions={posMap} />}
+      <ZoneLabels scale={layoutG} />
+      {posMap.size > 0 && <NodeLabels nodes={allNodes} positions={posMap} scale={layoutG} />}
 
       {/* Figure nodes — GPU instanced for perf */}
       {posMap.size > 0 && (
@@ -294,7 +325,7 @@ export function SceneRoot({
       />
 
       {/* Frame the whole constellation centered, once (preserves manual orbit). */}
-      {posMap.size > 0 && <FitView positions={posMap} />}
+      {posMap.size > 0 && <FitView positions={framePositions} />}
     </>
   );
 }
