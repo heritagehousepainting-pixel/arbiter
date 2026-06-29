@@ -383,7 +383,7 @@ class Engine:
         try:
             from arbiter.adapters.a4 import gather_a4_opinions  # noqa: PLC0415
             return gather_a4_opinions(self.conn, self.clock, self.config)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             log.warning("engine.a4.gather_failed", error=str(exc))
             return []
 
@@ -567,8 +567,8 @@ class Engine:
 
         for op in a4_opinions:
             if op.ticker in held_tickers:
-                # Still record the opinion against a held ticker's existing idea
-                # path is out of scope; skip new-idea spawn to avoid double-buying.
+                # Skip macro opinions on tickers we already hold (avoid double-buying);
+                # A4 only spawns NEW short-horizon ideas for unheld tickers.
                 continue
             if op.ticker not in seen_tickers:
                 seen_tickers.add(op.ticker)
