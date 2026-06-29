@@ -1,5 +1,7 @@
 // Read-only client for the cockpit sidecar.
 import type {
+  ChartRange,
+  ChartSeries,
   CockpitEvent,
   Graph,
   IVSeries,
@@ -26,6 +28,8 @@ export const fetchOptions = () => get<OptionsState>("/options");
 export const fetchIvSeries = (ticker: string) => get<IVSeries>(`/options/iv/${encodeURIComponent(ticker)}`);
 export const fetchTickerDetail = (symbol: string) =>
   get<TickerDetail>(`/ticker/${encodeURIComponent(symbol)}`);
+export const fetchChart = (symbol: string, range: ChartRange) =>
+  get<ChartSeries>(`/chart/${encodeURIComponent(symbol)}?range=${range}`);
 
 /** Subscribe to the live SSE event stream (Lane 2 implements /events). */
 export function subscribeEvents(onEvent: (e: CockpitEvent) => void): () => void {

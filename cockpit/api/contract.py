@@ -274,3 +274,25 @@ class OptionsState(BaseModel):
     avg_option_pl_pct: float | None = None
     avg_underlying_alpha_bps: float | None = None
     as_of: str
+
+
+# --- Watchlist live charts (read-only; served at GET /chart/{symbol}) ---------
+class Candle(BaseModel):
+    """One OHLCV bar with its trading-session classification."""
+    t: str              # ISO-8601 UTC bar-open timestamp
+    o: float
+    h: float
+    l: float
+    c: float
+    v: float
+    session: str        # "pre" | "regular" | "post"
+
+
+class ChartSeries(BaseModel):
+    """Chart data for one ticker + range. Fail-closed: empty candles on error."""
+    symbol: str
+    range: str                          # "live" | "5d" | "1m" | "3m" | "6m"
+    candles: list[Candle] = []
+    extended_available: bool = False    # True when pre/post-market bars are present
+    as_of: str
+    alpaca_ok: bool = False

@@ -127,6 +127,28 @@ export interface TickerDetail {
   as_of: string;                     // UTC ISO timestamp of fetch
 }
 
+// --- Watchlist live charts (mirror of ChartSeries in contract.py) ------------
+export type ChartRange = "live" | "5d" | "1m" | "3m" | "6m";
+
+export interface Candle {
+  t: string;          // ISO-8601 UTC bar-open timestamp
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+  session: "pre" | "regular" | "post";
+}
+
+export interface ChartSeries {
+  symbol: string;
+  range: ChartRange;
+  candles: Candle[];
+  extended_available: boolean;   // true when pre/post-market bars are present
+  as_of: string;
+  alpaca_ok: boolean;
+}
+
 // --- Options layer -----------------------------------------------------------
 export type OptionsMode = "off" | "shadow" | "paper";
 
