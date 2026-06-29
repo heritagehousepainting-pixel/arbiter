@@ -55,7 +55,7 @@ _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 # [J1, P1] Config fields whose values must be masked in repr/str.  Exact field
 # names plus a suffix rule for any *_webhook_url.
-_SECRET_FIELDS = {"alpaca_api_key", "alpaca_secret_key", "kill_switch_url"}
+_SECRET_FIELDS = {"alpaca_api_key", "alpaca_secret_key", "kill_switch_url", "anthropic_api_key"}
 _REDACTED = "***REDACTED***"
 
 
@@ -221,6 +221,15 @@ class Config:
     a3_weight_multiplier: float = 2.0
     a3_weight_cap: float = 0.50
     a3_advisor_id: str = "A3.news"
+
+    # --- Monday Refresh / A4.macro -------------------------------------
+    anthropic_api_key: str = ""
+    refresh_model: str = "claude-opus-4-8"
+    a4_min_stance: float = 0.25
+    a4_min_confidence: float = 0.0
+    a4_weight_multiplier: float = 2.0
+    a4_weight_cap: float = 0.50
+    a4_advisor_id: str = "A4.macro"
 
     # A1.fund (Form 13F) advisor — quarterly fund-manager holdings signals.
     # Env var: FORM13F_MIN_POSITION_USD
@@ -475,6 +484,13 @@ def load_config(config_path: Path | None = None) -> Config:
         a3_weight_multiplier=_env_float("A3_WEIGHT_MULTIPLIER", float(finnhub.get("weight_multiplier", 2.0))),
         a3_weight_cap=_env_float("A3_WEIGHT_CAP", float(finnhub.get("weight_cap", 0.50))),
         a3_advisor_id=_env_str("A3_ADVISOR_ID", str(finnhub.get("advisor_id", "A3.news"))),
+        anthropic_api_key=_env_str("ANTHROPIC_API_KEY", ""),
+        refresh_model=_env_str("REFRESH_MODEL", "claude-opus-4-8"),
+        a4_min_stance=_env_float("A4_MIN_STANCE", 0.25),
+        a4_min_confidence=_env_float("A4_MIN_CONFIDENCE", 0.0),
+        a4_weight_multiplier=_env_float("A4_WEIGHT_MULTIPLIER", 2.0),
+        a4_weight_cap=_env_float("A4_WEIGHT_CAP", 0.50),
+        a4_advisor_id=_env_str("A4_ADVISOR_ID", "A4.macro"),
         kill_switch_url=_env_str("KILL_SWITCH_URL", str(alerting.get("kill_switch_url", ""))),
         alert_webhook_url=_env_str("ALERT_WEBHOOK_URL", str(alerting.get("alert_webhook_url", ""))),
         fast_interval_s=_env_float("ARBITER_FAST_INTERVAL_S", float(daemon.get("fast_interval_s", 180.0))),
