@@ -12,6 +12,10 @@
 #   scripts/schedule.sh uninstall-daemon — unload + remove the daemon
 #   scripts/schedule.sh daemon-status    — daemon launchd status + last log lines
 #
+#   scripts/schedule.sh install-monday   — install the 08:00 Monday refresh one-shot
+#                                           (com.arbiter.monday; runs arbiter monday-refresh)
+#   scripts/schedule.sh uninstall-monday — unload + remove the Monday refresh plist
+#
 # C6: the daily 18:30 one-shot (com.arbiter.daily) is a flock-guarded "daemon was
 # down" fallback.  When the daemon holds data/arbiter-daemon.pid, the one-shot
 # `arbiter run` no-ops cleanly (see orchestrator/loop_runner.main).  Running both
@@ -26,6 +30,9 @@ LABEL="com.arbiter.daily"
 DAEMON_PLIST_SRC="$(cd "$(dirname "$0")/.." && pwd)/deploy/com.arbiter.daemon.plist"
 DAEMON_PLIST_DST="$HOME/Library/LaunchAgents/com.arbiter.daemon.plist"
 DAEMON_LABEL="com.arbiter.daemon"
+MONDAY_PLIST_SRC="$(cd "$(dirname "$0")/.." && pwd)/deploy/com.arbiter.monday.plist"
+MONDAY_PLIST_DST="$HOME/Library/LaunchAgents/com.arbiter.monday.plist"
+MONDAY_LABEL="com.arbiter.monday"
 DATA_DIR="$(cd "$(dirname "$0")/.." && pwd)/data"
 GUI_UID="gui/$(id -u)"
 
@@ -177,8 +184,47 @@ daemon-status)
     fi
     ;;
 
+install-monday)
+    if [[ ! -f "$MONDAY_PLIST_SRC" ]]; then
+        echo "ERROR: Monday plist not found at $MONDAY_PLIST_SRC" >&2
+        exit 1
+    fi
+    if launchctl list 2>/dev/null | grep -q "$MONDAY_LABEL"; then
+        echo "Monday job already loaded. Run 'scripts/schedule.sh uninstall-monday' first."
+        exit 0
+    fi
+    mkdir -p "$DATA_DIR"
+    cp "$MONDAY_PLIST_SRC" "$MONDAY_PLIST_DST"
+    if launchctl bootstrap "$GUI_UID" "$MONDAY_PLIST_DST" 2>/dev/null; then
+        echo "Monday job loaded via launchctl bootstrap."
+    elif launchctl load "$MONDAY_PLIST_DST" 2>/dev/null; then
+        echo "Monday job loaded via launchctl load (pre-Ventura fallback)."
+    else
+        echo "ERROR: launchctl could not load the Monday job. Check 'launchctl list'." >&2
+        exit 1
+    fi
+    echo ""
+    echo "Monday job installed. Fires at 08:00 every Monday (Weekday=1)."
+    echo "Verify with: launchctl list | grep $MONDAY_LABEL"
+    ;;
+
+uninstall-monday)
+    if launchctl bootout "$GUI_UID" "$MONDAY_PLIST_DST" 2>/dev/null; then
+        echo "Monday job unloaded via launchctl bootout."
+    elif launchctl unload "$MONDAY_PLIST_DST" 2>/dev/null; then
+        echo "Monday job unloaded via launchctl unload."
+    else
+        echo "Monday job was not loaded (or already unloaded)."
+    fi
+    if [[ -f "$MONDAY_PLIST_DST" ]]; then
+        rm "$MONDAY_PLIST_DST"
+        echo "Removed $MONDAY_PLIST_DST"
+    fi
+    echo "Monday job uninstalled."
+    ;;
+
 *)
-    echo "Usage: $0 {install|uninstall|status|run-now|install-daemon|uninstall-daemon|daemon-status}" >&2
+    echo "Usage: $0 {install|uninstall|status|run-now|install-daemon|uninstall-daemon|daemon-status|install-monday|uninstall-monday}" >&2
     exit 1
     ;;
 esac
