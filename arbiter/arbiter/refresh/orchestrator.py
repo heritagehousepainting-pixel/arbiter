@@ -11,7 +11,7 @@ from arbiter.refresh.findings_store import persist_findings
 from arbiter.refresh.macro_scan import scan_macro
 from arbiter.refresh.position_news import scan_position_news
 from arbiter.refresh.source_health import merge_flags, scan_source_health
-from arbiter.refresh.types import RefreshReport
+from arbiter.refresh.types import RefreshReport, HealthResult, MacroResult
 
 log = structlog.get_logger(__name__)
 
@@ -33,18 +33,20 @@ def run_monday_refresh(engine: Any, *, llm: Any = None, finnhub: Any = None,
     if finnhub is None:
         from arbiter.ingest.finnhub.client import FinnhubClient  # noqa: PLC0415
         key = getattr(engine.config, "finnhub_api_key", "") or ""
-        finnhub = FinnhubClient(key) if key else None
+        if key:
+            finnhub = _safe("finnhub_client", lambda: FinnhubClient(key), None)
 
     positions = _safe("position_news",
                       lambda: scan_position_news(tickers, as_of, finnhub) if finnhub else [],
                       [])
-    macro = _safe("macro", lambda: scan_macro(tickers, as_of, engine.config, llm=llm),
-                  scan_macro([], as_of, engine.config, llm=None))
+    macro = _safe("macro", lambda: scan_macro(tickers, as_of, engine.config, llm=llm), None)
+    if macro is None:
+        macro = MacroResult(findings=[], stale_flags=[], available=False,
+                            note="macro scan failed")
     health = _safe("health", lambda: scan_source_health(engine.conn, as_of), None)
     if health is None:
-        from arbiter.refresh.types import HealthResult  # noqa: PLC0415
         health = HealthResult(sources=[])
-    health = merge_flags(health, macro.stale_flags)
+    health = _safe("merge_flags", lambda: merge_flags(health, macro.stale_flags), health)
 
     # --- feed engine: persist macro findings (engine's A4 gather reads them) ---
     fed: list[str] = []
@@ -73,12 +75,15 @@ def run_monday_refresh(engine: Any, *, llm: Any = None, finnhub: Any = None,
                            reingested=reingested)
 
     # --- digest: save + push (always) ---
-    md = build_digest(report)
+    md = _safe("build_digest", lambda: build_digest(report), "")
     out = Path("data") / f"monday-refresh-{as_of.date().isoformat()}.md"
-    _safe("save_digest", lambda: out.write_text(md, encoding="utf-8"), None)
+    if md:
+        _safe("save_digest", lambda: out.write_text(md, encoding="utf-8"), None)
     if alerting is None:
         from arbiter.safety.alerting import Alerting  # noqa: PLC0415
-        alerting = Alerting(config=engine.config,
-                            audit_path=getattr(engine.config, "audit_path", "data/audit.jsonl"))
-    _safe("push_digest", lambda: push_digest(report, alerting=alerting), None)
+        alerting = _safe("alerting_ctor", lambda: Alerting(
+            config=engine.config,
+            audit_path=getattr(engine.config, "audit_path", "data/audit.jsonl")), None)
+    if alerting:
+        _safe("push_digest", lambda: push_digest(report, alerting=alerting), None)
     return report

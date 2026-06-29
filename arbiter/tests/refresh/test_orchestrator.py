@@ -64,3 +64,4 @@ def test_one_scan_failure_does_not_abort(tmp_path, monkeypatch):
         alerting=SimpleNamespace(notify=lambda *a, **k: None))
     assert report.positions[0].available is False   # finnhub failed, still reported
     assert report.macro.available is False           # no key, skipped
+    assert (tmp_path / "data" / "monday-refresh-2026-06-29.md").exists()
