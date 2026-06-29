@@ -146,6 +146,19 @@ class Alerting:
 
         return None
 
+    def notify(self, title: str, body: str, *, as_of: datetime) -> None:
+        """Info-tier push: audit + always-POST the webhook (fire-and-forget)."""
+        ts = as_of.isoformat()
+        message = f"{title}\n{body}"
+        _audit_write(
+            "alert.info",
+            {"message": message, "tier": "info", "ctx": {"title": title}},
+            ts=ts,
+            audit_path=self.audit_path,
+        )
+        self._post_webhook(tier="info", message=message,
+                           ctx={"title": title}, ts=ts)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
