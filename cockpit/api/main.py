@@ -7,11 +7,12 @@ writes to the trading system (see ``db.py``).  Run:
 """
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from .contract import Graph, Health, IVSeries, NodeDetail, OptionsState, PositionsResponse, State, TickerDetail
+from .chart import build_chart_series
+from .contract import ChartSeries, Graph, Health, IVSeries, NodeDetail, OptionsState, PositionsResponse, State, TickerDetail
 from .db import connect, db_reachable
 from .events import event_stream
 from .graph import build_graph
@@ -103,3 +104,10 @@ def options_iv(ticker: str) -> IVSeries:
         return build_iv_series(conn, ticker)
     finally:
         conn.close()
+
+
+@app.get("/chart/{symbol}", response_model=ChartSeries)
+def chart(symbol: str, range: str = Query(default="live")) -> ChartSeries:
+    """OHLCV chart data for one ticker (read-only, from Alpaca). Never raises."""
+    range_val = range if range in {"live", "5d", "1m", "3m", "6m"} else "live"
+    return build_chart_series(symbol.strip().upper(), range_val)
