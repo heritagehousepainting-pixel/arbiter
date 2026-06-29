@@ -378,6 +378,15 @@ class Engine:
             log.warning("engine.a3.gather_failed", error=str(exc))
             return []
 
+    def _gather_a4_opinions(self) -> list[Opinion]:
+        """Gather A4.macro opinions from persisted findings (fail-closed)."""
+        try:
+            from arbiter.adapters.a4 import gather_a4_opinions  # noqa: PLC0415
+            return gather_a4_opinions(self.conn, self.clock, self.config)
+        except Exception as exc:
+            log.warning("engine.a4.gather_failed", error=str(exc))
+            return []
+
     def run_cycle(self, as_of: datetime | None = None) -> CycleResult:
         """Run one full decision cycle.
 
@@ -499,10 +508,11 @@ class Engine:
         # adapters.a3: returns [] without FINNHUB_API_KEY and under a BacktestClock
         # (no network / no look-ahead); never raises.
         a3_opinions = self._gather_a3_opinions()
+        a4_opinions = self._gather_a4_opinions()
 
         # Detect what signals exist to build ideas.
         signals = detect_signals(self.conn, now)
-        if not signals and not a3_opinions:
+        if not signals and not a3_opinions and not a4_opinions:
             log.info("engine.run_cycle.no_signals", as_of=now.isoformat())
             return CycleResult(ideas_processed=0)
 
@@ -549,6 +559,22 @@ class Engine:
                 ideas.append(make_idea(
                     ticker=op.ticker,
                     thesis=f"news on {op.ticker}",
+                    horizon_days=op.horizon_days,
+                    as_of=now,
+                ))
+            valid_opinions.append(op)
+            live_advisor_count += 1
+
+        for op in a4_opinions:
+            if op.ticker in held_tickers:
+                # Still record the opinion against a held ticker's existing idea
+                # path is out of scope; skip new-idea spawn to avoid double-buying.
+                continue
+            if op.ticker not in seen_tickers:
+                seen_tickers.add(op.ticker)
+                ideas.append(make_idea(
+                    ticker=op.ticker,
+                    thesis=f"macro on {op.ticker}",
                     horizon_days=op.horizon_days,
                     as_of=now,
                 ))
