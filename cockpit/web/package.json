@@ -15,6 +15,7 @@
     "@react-three/fiber": "^8.17.10",
     "@react-three/postprocessing": "^2.16.3",
     "d3-force-3d": "^3.0.5",
+    "lightweight-charts": "^5.2.0",
     "postprocessing": "^6.36.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

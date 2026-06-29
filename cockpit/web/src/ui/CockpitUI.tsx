@@ -23,6 +23,8 @@ import { theme } from "../theme/theme";
 import { OptionsPanel } from "./OptionsPanel";
 import { PositionsPanel } from "./PositionsPanel";
 import { useCockpitStore } from "./store";
+import { WatchlistBar } from "./WatchlistBar";
+import { WatchlistChartBox } from "./WatchlistChartBox";
 
 // ---------------------------------------------------------------------------
 // Design tokens (layer on top of theme)
@@ -1477,6 +1479,9 @@ export function CockpitUI({
           }}
         />
       )}
+      {/* Watchlist: search bar + chart panel */}
+      <WatchlistBar inspectionOpen={!!effectiveSelectedId} />
+      <WatchlistChartBox />
     </>
   );
 }

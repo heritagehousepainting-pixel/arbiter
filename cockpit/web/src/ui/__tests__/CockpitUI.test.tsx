@@ -3,7 +3,7 @@
  * Uses react-dom/client + jsdom (no @testing-library/react needed).
  */
 import React from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import { CockpitUI } from "../CockpitUI";
 import { useCockpitStore } from "../store";
@@ -93,6 +93,23 @@ const FIXTURE_NODE_TRADE: NodeDetail = {
 // ---------------------------------------------------------------------------
 // Mock fetchNode so tests don't need a real API
 // ---------------------------------------------------------------------------
+// jsdom shim: window.matchMedia is not implemented in jsdom.
+// WatchlistBar (now mounted inside CockpitUI) calls prefersReducedMotion()
+// which uses matchMedia. Stub it out so CockpitUI renders cleanly.
+// ---------------------------------------------------------------------------
+// Note: lightweight-charts is NOT mocked here because WatchlistChartBox renders
+// null when activeWatchSymbol is null (default store state), so createChart is
+// never called during these tests.
+vi.mock("lightweight-charts", () => ({
+  createChart: vi.fn(() => ({
+    addSeries: vi.fn(() => ({ setData: vi.fn() })),
+    remove: vi.fn(),
+    timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
+  })),
+  CandlestickSeries: { name: "Candlestick" },
+}));
+
+// ---------------------------------------------------------------------------
 vi.mock("../../api", () => ({
   fetchNode: vi.fn(() => Promise.resolve(null)),
   fetchGraph: vi.fn(() => Promise.resolve({ nodes: [], edges: [] })),
@@ -110,6 +127,10 @@ vi.mock("../../api", () => ({
     }),
   ),
   fetchTickerDetail: vi.fn(() => Promise.resolve({ symbol: "X", name: null, month_return_pct: null, current_price: null, as_of: "2026-06-26T00:00:00Z" })),
+  fetchChart: vi.fn(() => Promise.resolve({
+    symbol: "X", range: "live", candles: [], extended_available: false,
+    as_of: "2026-06-26T00:00:00Z", alpaca_ok: true,
+  })),
   fetchOptions: vi.fn(() =>
     Promise.resolve({
       options_mode: "off",
@@ -137,6 +158,19 @@ import { fetchNode } from "../../api";
 // ---------------------------------------------------------------------------
 let container: HTMLDivElement;
 let root: Root;
+
+// jsdom shim: window.matchMedia not available — needed for WatchlistBar render
+beforeAll(() => {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  });
+});
 
 beforeEach(() => {
   container = document.createElement("div");
