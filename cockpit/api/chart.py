@@ -77,12 +77,16 @@ def _build_range_params(range_: str, feed: str) -> dict[str, str]:
             today_et.year, today_et.month, today_et.day, 4, 0, 0, tzinfo=_ET
         )
         start_utc = start_et.astimezone(timezone.utc)
+        # Live/intraday uses the IEX feed: it is real-time and includes
+        # extended-hours (pre/post) bars. SIP is NOT used here because basic
+        # plans reject recent SIP queries ("subscription does not permit
+        # querying recent SIP data"); IEX has no such restriction. Do NOT pass
+        # extended_hours — Alpaca /bars rejects it as an unexpected parameter.
         return {
             "timeframe": "5Min",
-            "extended_hours": "true",
             "start": start_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "end": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "feed": feed,
+            "feed": "iex",
         }
     elif range_ == "5d":
         return {
