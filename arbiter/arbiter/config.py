@@ -227,6 +227,8 @@ class Config:
     refresh_model: str = "claude-opus-4-8"
     a4_min_stance: float = 0.25
     a4_min_confidence: float = 0.0
+    # Reserved for future A4.macro graduation tuning (not yet consumed — A4 is
+    # intentionally held at base probationary weight, unlike A3's news boost).
     a4_weight_multiplier: float = 2.0
     a4_weight_cap: float = 0.50
     a4_advisor_id: str = "A4.macro"

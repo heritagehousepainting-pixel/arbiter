@@ -43,3 +43,14 @@ def test_inert_under_backtest_clock():
     now = datetime(2026, 6, 29, tzinfo=timezone.utc)
     persist_findings(c, [MacroFinding("x", Severity.HIGH, ["UBER"], [])], now)
     assert gather_a4_opinions(c, BacktestClock(now), _cfg()) == []
+
+
+def test_low_severity_finding_gated_out():
+    c = sqlite3.connect(":memory:")
+    create_table(c)
+    now = datetime(2026, 6, 29, tzinfo=timezone.utc)
+    persist_findings(c, [MacroFinding("weak", Severity.LOW, ["UBER"], [])], now)
+    assert gather_a4_opinions(c, _LiveClock(now), _cfg()) == []
+    persist_findings(c, [MacroFinding("strong", Severity.HIGH, ["LYFT"], [])], now)
+    ops = gather_a4_opinions(c, _LiveClock(now), _cfg())
+    assert [o.ticker for o in ops] == ["LYFT"]

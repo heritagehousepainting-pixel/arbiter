@@ -41,12 +41,16 @@ def gather_a4_opinions(conn: sqlite3.Connection, clock: Clock,
         as_of: datetime = clock.now()
         advisor_id = getattr(config, "a4_advisor_id", ADVISOR_ID)
         min_conf = float(getattr(config, "a4_min_confidence", 0.0))
+        min_stance = float(getattr(config, "a4_min_stance", 0.25))
         run_group = generate_ulid()
         out: list[Opinion] = []
         seen: set[str] = set()
         for f in read_active_findings(conn, as_of):
             conf = _SEV_CONF.get(f.severity, 0.15)
             if conf < min_conf:
+                continue
+            stance = _stance(f)
+            if abs(stance) < min_stance:
                 continue
             for ticker in f.affected_tickers:
                 key = f"{ticker}:{f.summary}"
@@ -55,7 +59,7 @@ def gather_a4_opinions(conn: sqlite3.Connection, clock: Clock,
                 seen.add(key)
                 fp = hashlib.sha256(key.encode()).hexdigest()
                 op = Opinion(
-                    advisor_id=advisor_id, ticker=ticker, stance_score=_stance(f),
+                    advisor_id=advisor_id, ticker=ticker, stance_score=stance,
                     confidence=conf, confidence_source=ConfidenceSource.MODELED,
                     horizon_days=_HORIZON_DAYS, as_of=as_of,
                     rationale=f"A4.macro {ticker}: {f.summary}"[:500],
