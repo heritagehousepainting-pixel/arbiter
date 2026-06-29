@@ -17,7 +17,8 @@ _MAX_AGE_DAYS: dict[str, int] = {
 }
 
 
-def default_ingest_age_fn(conn: sqlite3.Connection, source: str) -> int | None:
+def default_ingest_age_fn(conn: sqlite3.Connection, source: str,
+                          as_of: datetime) -> int | None:
     """Days since the newest row for `source` in the filings table, or None."""
     try:
         row = conn.execute(
@@ -26,19 +27,21 @@ def default_ingest_age_fn(conn: sqlite3.Connection, source: str) -> int | None:
         if not row or not row[0]:
             return None
         newest = datetime.fromisoformat(row[0])
-        return (datetime.now(tz=newest.tzinfo) - newest).days
+        if newest.tzinfo is None:
+            newest = newest.replace(tzinfo=as_of.tzinfo)
+        return (as_of - newest).days
     except Exception:  # table/column shape differences -> unknown, never crash
         return None
 
 
 def scan_source_health(conn: Any, as_of: datetime, *,
-                       ingest_age_fn: Callable[[Any, str], int | None] | None = None
+                       ingest_age_fn: Callable[[Any, str, datetime], int | None] | None = None
                        ) -> HealthResult:
     age_fn = ingest_age_fn or default_ingest_age_fn
     sources: list[StaleSource] = []
     for src, max_age in _MAX_AGE_DAYS.items():
         try:
-            age = age_fn(conn, src)
+            age = age_fn(conn, src, as_of)
         except Exception as exc:
             log.warning("refresh.health.age_failed", source=src, error=str(exc))
             age = None
