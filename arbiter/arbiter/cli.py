@@ -176,6 +176,23 @@ def daemon() -> None:
     typer.echo(f"  last_ingest_date : {getattr(state, 'last_ingest_date', None)}")
 
 
+@app.command("monday-refresh")
+def monday_refresh() -> None:
+    """Run the Monday pre-market intelligence pass (scan + digest + feed engine)."""
+    from arbiter.engine import build_engine  # noqa: PLC0415
+    from arbiter.refresh.orchestrator import run_monday_refresh  # noqa: PLC0415
+
+    engine = build_engine()
+    report = run_monday_refresh(engine)
+    typer.echo("Monday refresh complete.")
+    typer.echo(f"  positions scanned : {len(report.positions)}")
+    typer.echo(f"  macro findings    : {len(report.macro.findings)} "
+               f"(available={report.macro.available})")
+    typer.echo(f"  stale sources     : {len(report.health.confirmed_stale())}")
+    typer.echo(f"  fed (A4.macro)    : {', '.join(report.fed_tickers) or 'none'}")
+    typer.echo(f"  re-ingested       : {', '.join(report.reingested) or 'none'}")
+
+
 @app.command("backtest")
 def backtest(
     start: str = typer.Option(..., "--start", help="Start date YYYY-MM-DD"),
