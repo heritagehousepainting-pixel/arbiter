@@ -185,7 +185,7 @@ def select_contract(
     best = candidates[0]
 
     log.info(
-        "select_contract: selected %s (delta=%.3f, oi=%d, vol=%d, expiry=%s)",
+        "select_contract: selected %s (delta=%.3f, oi=%s, vol=%s, expiry=%s)",
         best.occ_symbol,
         best.delta,  # type: ignore[arg-type]
         best.open_interest,  # type: ignore[arg-type]
