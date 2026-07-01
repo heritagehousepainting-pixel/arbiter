@@ -3,7 +3,9 @@
  *
  * Placement: bottom-right, stacked below Walkthrough inside a flex column-reverse
  * container in CockpitUI.tsx.  Position/size exact per layout plan:
- *   width: min(400px, calc(100vw - 96px))
+ *   width: min(640px, calc(100vw - 96px))  — widened so the 8-column open
+ *     positions table (Contract/Side/Bought/Current/Qty/DTE/ROI/P&L) never
+ *     crams; matches the sibling PositionsPanel's roomier column spacing.
  *   maxHeight: 52vh
  *   Collapsed to 36px header strip when InspectionPanel is open (occlusion guard).
  *
@@ -229,20 +231,20 @@ function OptionDetailRow({
     const intrinsic = p.side === "put" ? p.strike - cur : cur - p.strike;
     moneyness = `${intrinsic >= 0 ? "ITM" : "OTM"} by ${usd(Math.abs(intrinsic))}`;
   }
-  const lbl = { color: C.muted, minWidth: 58, display: "inline-block" } as const;
+  const lbl = { color: C.muted, minWidth: 64, display: "inline-block" } as const;
   return (
     <tr>
-      <td colSpan={7} style={{ padding: "1px 0 9px 14px" }}>
+      <td colSpan={8} style={{ padding: "2px 0 11px 18px" }}>
         {loading ? (
           <span style={{ color: C.muted, fontStyle: "italic", fontSize: 11 }}>loading…</span>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10.5, lineHeight: 1.5 }}>
-            <div style={{ color: C.text, fontWeight: 700, fontSize: 11.5 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, lineHeight: 1.6 }}>
+            <div style={{ color: C.text, fontWeight: 700, fontSize: 12 }}>
               {detail?.name ?? p.underlying}
             </div>
             <div><span style={lbl}>Today</span>{cur != null ? usd(cur) : "—"} &nbsp;<PctChip frac={detail?.day_change_pct} /></div>
             <div><span style={lbl}>1-Month</span><PctChip frac={detail?.month_return_pct} /></div>
-            <div style={{ color: C.muted, fontSize: 9, letterSpacing: 1, marginTop: 3 }}>SINCE YOU OPENED</div>
+            <div style={{ color: C.muted, fontSize: 9.5, letterSpacing: 1, marginTop: 4 }}>SINCE YOU OPENED</div>
             <div>
               <span style={lbl}>Underlying</span>
               {usd(p.underlying_open_price)} → {cur != null ? usd(cur) : "—"} &nbsp;<PctChip frac={sinceOpen} />
@@ -250,10 +252,6 @@ function OptionDetailRow({
             <div>
               <span style={lbl}>Strike</span>
               {usd(p.strike)}{moneyness ? ` · ${moneyness}` : ""} · Δ {fmt(p.delta_at_open, 2)}
-            </div>
-            <div>
-              <span style={lbl}>Premium</span>
-              {usd(perContractEntry(p))} → {p.current_mid != null ? usd(p.current_mid) : "—"} &nbsp;<PctChip frac={p.unrealized_pl_pct} />
             </div>
             <div>
               <span style={lbl}>Cost basis</span>
@@ -309,19 +307,20 @@ export function OpenPositionsTable({
         style={{
           width: "100%",
           borderCollapse: "collapse",
-          fontSize: 11,
+          fontSize: 11.5,
           fontFamily: C.mono,
         }}
       >
         <thead>
           <tr style={{ color: C.muted }}>
-            <th style={{ textAlign: "left" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Contract</th>
-            <th style={{ textAlign: "left" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Side</th>
-            <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Bought/Now</th>
-            <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Qty</th>
-            <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>DTE</th>
-            <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>ROI</th>
-            <th style={{ textAlign: "right" as const, padding: "2px 0 4px 0", fontWeight: 600 }}>P&L</th>
+            <th style={{ textAlign: "left" as const, padding: "0 12px 5px 0", fontWeight: 600 }}>Contract</th>
+            <th style={{ textAlign: "left" as const, padding: "0 12px 5px 0", fontWeight: 600 }}>Side</th>
+            <th style={{ textAlign: "right" as const, padding: "0 12px 5px 0", fontWeight: 600 }}>Bought</th>
+            <th style={{ textAlign: "right" as const, padding: "0 12px 5px 0", fontWeight: 600 }}>Current</th>
+            <th style={{ textAlign: "right" as const, padding: "0 12px 5px 0", fontWeight: 600 }}>Qty</th>
+            <th style={{ textAlign: "right" as const, padding: "0 12px 5px 0", fontWeight: 600 }}>DTE</th>
+            <th style={{ textAlign: "right" as const, padding: "0 12px 5px 0", fontWeight: 600 }}>ROI</th>
+            <th style={{ textAlign: "right" as const, padding: "0 0 5px 0", fontWeight: 600 }}>P&L</th>
           </tr>
         </thead>
         <tbody>
@@ -331,24 +330,24 @@ export function OpenPositionsTable({
             return (
               <Fragment key={p.id}>
               <tr style={{ borderTop: C.border }}>
-                <td style={{ padding: "3px 6px 3px 0" }}>
+                <td style={{ padding: "6px 12px 6px 0", whiteSpace: "nowrap" as const }}>
                   <button
                     onClick={() => handleToggle(p)}
                     aria-expanded={isOpen}
                     style={{
                       background: "none", border: 0, padding: 0, cursor: "pointer",
-                      color: C.amber, fontWeight: 600, fontFamily: C.mono, fontSize: 11,
+                      color: C.amber, fontWeight: 600, fontFamily: C.mono, fontSize: 11.5,
                     }}
                   >
                     {isOpen ? "▾" : "▸"} {contractLabel(p)}
                   </button>
                 </td>
-                <td style={{ padding: "3px 6px 3px 0" }}>
+                <td style={{ padding: "6px 12px 6px 0" }}>
                   <span
                     style={{
-                      fontSize: 9,
+                      fontSize: 9.5,
                       fontWeight: 700,
-                      padding: "1px 5px",
+                      padding: "2px 6px",
                       borderRadius: 3,
                       color: p.side === "put" ? "#ffb4c0" : "#9ff0d0",
                       background:
@@ -361,21 +360,24 @@ export function OpenPositionsTable({
                     {p.side}
                   </span>
                 </td>
-                <td style={{ padding: "3px 6px 3px 0", textAlign: "right" as const, whiteSpace: "nowrap" as const }}>
-                  <span style={{ color: C.muted }}>{usd(perContractEntry(p))}</span>
-                  <span style={{ color: C.muted }}> / </span>
-                  <span style={{ color: p.current_mid == null ? C.muted : plColor(p.unrealized_pl_pct), fontWeight: 600 }}>
-                    {p.current_mid != null ? usd(p.current_mid) : "—"}
-                  </span>
+                <td style={{ padding: "6px 12px 6px 0", textAlign: "right" as const, color: C.muted, whiteSpace: "nowrap" as const }}>
+                  {usd(perContractEntry(p))}
                 </td>
-                <td style={{ padding: "3px 6px 3px 0", textAlign: "right" as const, color: C.text }}>
+                <td style={{
+                  padding: "6px 12px 6px 0", textAlign: "right" as const, whiteSpace: "nowrap" as const,
+                  color: p.current_mid == null ? C.muted : plColor(p.unrealized_pl_pct),
+                  fontWeight: 600,
+                }}>
+                  {p.current_mid != null ? usd(p.current_mid) : "—"}
+                </td>
+                <td style={{ padding: "6px 12px 6px 0", textAlign: "right" as const, color: C.text }}>
                   {p.contracts_qty}
                 </td>
-                <td style={{ padding: "3px 6px 3px 0", textAlign: "right" as const, color: C.muted }}>
+                <td style={{ padding: "6px 12px 6px 0", textAlign: "right" as const, color: C.muted }}>
                   {p.dte ?? "—"}
                 </td>
                 <td style={{
-                  padding: "3px 6px 3px 0", textAlign: "right" as const,
+                  padding: "6px 12px 6px 0", textAlign: "right" as const,
                   color: p.unrealized_pl_pct == null ? C.muted : plColor(p.unrealized_pl_pct),
                   fontWeight: 700,
                 }}>
@@ -383,10 +385,11 @@ export function OpenPositionsTable({
                 </td>
                 <td
                   style={{
-                    padding: "3px 0",
+                    padding: "6px 0",
                     textAlign: "right" as const,
                     color: plColor(pl),
                     fontWeight: 700,
+                    whiteSpace: "nowrap" as const,
                   }}
                 >
                   {usd(pl, true)}
@@ -432,20 +435,20 @@ function RecentPlaysTable({ plays }: { plays: OptionShadowPlay[] }) {
       >
         <thead>
           <tr style={{ color: C.muted }}>
-            <th style={{ textAlign: "left" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Contract</th>
-            <th style={{ textAlign: "left" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Type</th>
-            <th style={{ textAlign: "left" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Gate</th>
-            <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Conv</th>
-            <th style={{ textAlign: "left" as const, padding: "2px 0 4px 0", fontWeight: 600 }}>Tag</th>
+            <th style={{ textAlign: "left" as const, padding: "0 10px 5px 0", fontWeight: 600 }}>Contract</th>
+            <th style={{ textAlign: "left" as const, padding: "0 10px 5px 0", fontWeight: 600 }}>Type</th>
+            <th style={{ textAlign: "left" as const, padding: "0 10px 5px 0", fontWeight: 600 }}>Gate</th>
+            <th style={{ textAlign: "right" as const, padding: "0 10px 5px 0", fontWeight: 600 }}>Conv</th>
+            <th style={{ textAlign: "left" as const, padding: "0 0 5px 0", fontWeight: 600 }}>Tag</th>
           </tr>
         </thead>
         <tbody>
           {plays.map((p) => (
             <tr key={p.id} style={{ borderTop: C.border }}>
-              <td style={{ padding: "3px 6px 3px 0", color: C.text }}>
+              <td style={{ padding: "6px 10px 6px 0", color: C.text }}>
                 {shadowContractLabel(p)}
               </td>
-              <td style={{ padding: "3px 6px 3px 0" }}>
+              <td style={{ padding: "6px 10px 6px 0" }}>
                 <span
                   style={{
                     fontSize: 9,
@@ -463,7 +466,7 @@ function RecentPlaysTable({ plays }: { plays: OptionShadowPlay[] }) {
               </td>
               <td
                 style={{
-                  padding: "3px 6px 3px 0",
+                  padding: "6px 10px 6px 0",
                   color: C.muted,
                   fontSize: 10,
                   maxWidth: 90,
@@ -475,10 +478,10 @@ function RecentPlaysTable({ plays }: { plays: OptionShadowPlay[] }) {
               >
                 {p.gate_reason ?? "—"}
               </td>
-              <td style={{ padding: "3px 6px 3px 0", textAlign: "right" as const, color: C.text }}>
+              <td style={{ padding: "6px 10px 6px 0", textAlign: "right" as const, color: C.text }}>
                 {fmt(p.conviction, 2)}
               </td>
-              <td style={{ padding: "3px 0", color: C.muted, fontSize: 10 }}>
+              <td style={{ padding: "6px 0", color: C.muted, fontSize: 10 }}>
                 {p.catalyst_tag ?? "—"}
               </td>
             </tr>
@@ -566,21 +569,21 @@ function IVSummary({
             >
               <thead>
                 <tr style={{ color: C.muted }}>
-                  <th style={{ textAlign: "left" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Ticker</th>
-                  <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>ATM IV</th>
-                  <th style={{ textAlign: "right" as const, padding: "2px 0 4px 0", fontWeight: 600 }}>IVR</th>
+                  <th style={{ textAlign: "left" as const, padding: "0 10px 5px 0", fontWeight: 600 }}>Ticker</th>
+                  <th style={{ textAlign: "right" as const, padding: "0 10px 5px 0", fontWeight: 600 }}>ATM IV</th>
+                  <th style={{ textAlign: "right" as const, padding: "0 0 5px 0", fontWeight: 600 }}>IVR</th>
                 </tr>
               </thead>
               <tbody>
                 {tickers.map(([ticker, { ivr, iv }]) => (
                   <tr key={ticker} style={{ borderTop: C.border }}>
-                    <td style={{ padding: "3px 6px 3px 0", color: C.amber }}>{ticker}</td>
-                    <td style={{ padding: "3px 6px 3px 0", textAlign: "right" as const, color: C.text }}>
+                    <td style={{ padding: "6px 10px 6px 0", color: C.amber }}>{ticker}</td>
+                    <td style={{ padding: "6px 10px 6px 0", textAlign: "right" as const, color: C.text }}>
                       {iv != null ? `${(iv * 100).toFixed(1)}%` : "—"}
                     </td>
                     <td
                       style={{
-                        padding: "3px 0",
+                        padding: "6px 0",
                         textAlign: "right" as const,
                         color: ivr != null && ivr >= 0.5 ? C.amber : C.muted,
                         fontWeight: ivr != null && ivr >= 0.5 ? 600 : 400,
@@ -679,8 +682,8 @@ export function OptionsPanel({ inspectionOpen }: OptionsPanelProps) {
 
   // Occlusion guard #2 — horizontal overlap with the top-center Positions panel.
   // That panel is 560px wide, centered (`left:50%`), so its right edge is at
-  // `50vw + 280`; this panel's left edge is at `100vw - 448` (width 400, right 48).
-  // They overlap once `50vw + 280 > 100vw - 448`, i.e. below ~1456px wide.  When
+  // `50vw + 280`; this panel's left edge is at `100vw - 688` (width 640, right 48).
+  // They overlap once `50vw + 280 > 100vw - 688`, i.e. below ~1936px wide.  When
   // that happens we cap the body so the panel's top stays clear of the Positions
   // panel's worst-case footprint (its 60vh scroll cap) instead of rising under it.
   const [vw, setVw] = useState<number>(
@@ -693,7 +696,7 @@ export function OptionsPanel({ inspectionOpen }: OptionsPanelProps) {
   }, []);
   // top = vh - 84(container bottom) - 36(header) - body; require it ≥ 16 + 60vh + 12
   // gap → body ≤ 40vh - 148px.  Above the threshold the original 52vh is used.
-  const bodyMaxHeight = vw < 1456 ? "calc(40vh - 148px)" : "52vh";
+  const bodyMaxHeight = vw < 1936 ? "calc(40vh - 148px)" : "52vh";
 
   const mode = data?.options_mode ?? "off";
   const nOpen = data?.n_open ?? 0;
@@ -706,7 +709,7 @@ export function OptionsPanel({ inspectionOpen }: OptionsPanelProps) {
     <div
       data-testid="options-panel"
       style={{
-        width: "min(400px, calc(100vw - 96px))",
+        width: "min(640px, calc(100vw - 96px))",
         background: C.bg,
         border: panelBorder,
         borderRadius: C.radius,
