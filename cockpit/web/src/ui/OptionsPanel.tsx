@@ -203,6 +203,14 @@ function PctChip({ frac }: { frac: number | null | undefined }) {
   return <span style={{ color: plColor(frac), fontWeight: 700 }}>{pct(frac)}</span>;
 }
 
+// Per-contract (per-share) premium: entry_premium is the TOTAL paid for all
+// contracts in the position, so divide out contracts_qty and the ×100
+// multiplier to get the single-contract quote (e.g. "$0.75", matching how
+// the option was quoted when bought). current_mid is already per-share.
+function perContractEntry(p: OpenOptionPosition): number {
+  return p.entry_premium / (p.contracts_qty * 100);
+}
+
 // Expanded tracking detail for one option (underlying live + since-open context).
 function OptionDetailRow({
   p, detail, loading,
@@ -244,8 +252,12 @@ function OptionDetailRow({
               {usd(p.strike)}{moneyness ? ` · ${moneyness}` : ""} · Δ {fmt(p.delta_at_open, 2)}
             </div>
             <div>
-              <span style={lbl}>Entry</span>
-              {usd(p.entry_premium)} · conviction {fmt(p.original_conviction, 2)}
+              <span style={lbl}>Premium</span>
+              {usd(perContractEntry(p))} → {p.current_mid != null ? usd(p.current_mid) : "—"} &nbsp;<PctChip frac={p.unrealized_pl_pct} />
+            </div>
+            <div>
+              <span style={lbl}>Cost basis</span>
+              {usd(p.entry_premium)} total · conviction {fmt(p.original_conviction, 2)}
             </div>
           </div>
         )}
@@ -305,7 +317,7 @@ export function OpenPositionsTable({
           <tr style={{ color: C.muted }}>
             <th style={{ textAlign: "left" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Contract</th>
             <th style={{ textAlign: "left" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Side</th>
-            <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Δ</th>
+            <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Bought/Now</th>
             <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>Qty</th>
             <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>DTE</th>
             <th style={{ textAlign: "right" as const, padding: "2px 6px 4px 0", fontWeight: 600 }}>ROI</th>
@@ -349,8 +361,12 @@ export function OpenPositionsTable({
                     {p.side}
                   </span>
                 </td>
-                <td style={{ padding: "3px 6px 3px 0", textAlign: "right" as const, color: C.text }}>
-                  {fmt(p.delta_at_open, 2)}
+                <td style={{ padding: "3px 6px 3px 0", textAlign: "right" as const, whiteSpace: "nowrap" as const }}>
+                  <span style={{ color: C.muted }}>{usd(perContractEntry(p))}</span>
+                  <span style={{ color: C.muted }}> / </span>
+                  <span style={{ color: p.current_mid == null ? C.muted : plColor(p.unrealized_pl_pct), fontWeight: 600 }}>
+                    {p.current_mid != null ? usd(p.current_mid) : "—"}
+                  </span>
                 </td>
                 <td style={{ padding: "3px 6px 3px 0", textAlign: "right" as const, color: C.text }}>
                   {p.contracts_qty}
