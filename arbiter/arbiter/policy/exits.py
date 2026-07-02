@@ -41,7 +41,13 @@ _HORIZON_DAYS_BY_BUCKET: dict[HorizonBucket, int] = {
     HorizonBucket.INTRADAY: 1,    # exit by end of day
     HorizonBucket.SHORT:    15,   # midpoint of 1–30
     HorizonBucket.MEDIUM:   75,   # midpoint of 31–120
-    HorizonBucket.LONG:     240,  # midpoint of 121–365
+    # Tier-3 #10 (2026-07-02): LONG was 240 (midpoint of 121–365).  Shortened
+    # to 150 — still inside the bucket range — to speed outcome generation
+    # ~1.6x (the learning loop was starved by 8-month holds; 6 positions
+    # wouldn't have closed until Feb-2027).  Applies retroactively to held
+    # positions: the exit monitor recomputes horizons from this constant each
+    # cycle (the stored horizon_expiry is as phantom as the stored stop).
+    HorizonBucket.LONG:     150,
 }
 
 

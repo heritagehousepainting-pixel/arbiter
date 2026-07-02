@@ -135,8 +135,10 @@ def test_feeds_decide_params() -> None:
         "current_open_positions": 3,
         "current_gross_exposure": pytest.approx(3500.0),
         "current_sector_exposure": pytest.approx(500.0),
+        "current_name_exposure": pytest.approx(500.0),  # Tier-2 #5 add-on headroom
     }
     # types match decide() signature
     assert isinstance(kwargs["current_open_positions"], int)
     assert isinstance(kwargs["current_gross_exposure"], float)
     assert isinstance(kwargs["current_sector_exposure"], float)
+    assert isinstance(kwargs["current_name_exposure"], float)

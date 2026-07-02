@@ -94,6 +94,9 @@ def test_open_count_cap_rejects_when_book_full(tmp_path, monkeypatch, audit_path
     held = {f"H{i}": (10.0, 100.0) for i in range(8)}
     _seed_broker_positions(fake, held)
 
+    # Hermetic: pin the cap this test's book is sized for (conftest blanks the
+    # live .env override; the toml default is 20).
+    monkeypatch.setenv("ARBITER_MAX_OPEN_POSITIONS", "8")
     eng, conn, config = _build_paper_engine(tmp_path, monkeypatch, fake, audit=audit_path)
     assert config.max_open_positions == 8
 
@@ -114,6 +117,9 @@ def test_gross_cap_rejects_when_book_near_gross_limit(tmp_path, monkeypatch, aud
     # 350 sh * $150 = $52,500 > 0.50 * 100k. Sector differs from AAPL (IT).
     _seed_broker_positions(fake, {"XOM": (350.0, 150.0)})  # Energy sector
 
+    # Hermetic: pin the gross cap this test's book is sized for (conftest
+    # blanks the live .env override; the toml default is 0.80).
+    monkeypatch.setenv("ARBITER_MAX_GROSS_PCT", "0.50")
     eng, conn, config = _build_paper_engine(tmp_path, monkeypatch, fake, audit=audit_path)
     assert config.max_gross_pct == 0.5
 

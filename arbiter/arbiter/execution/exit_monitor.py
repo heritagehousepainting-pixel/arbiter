@@ -98,6 +98,73 @@ def recompute_stop(
     return avg_price * (1.0 - frac)
 
 
+# Tier-3 #10 — trailing-stop parameters.  The trail arms once the position has
+# moved ≥ _TRAIL_TRIGGER in its favor (highwater vs entry for a long); the stop
+# then ratchets to lock all but _TRAIL_LOCK of the favorable extreme.  Both the
+# extreme and the stop are pure functions of PIT closes + entry — no persisted
+# high-water state, so the daemon can restart without losing the ratchet.
+_TRAIL_TRIGGER: float = 0.10
+_TRAIL_LOCK: float = 0.06
+_TRAIL_LOOKBACK_DAYS: int = 20  # bounded PIT walk (calendar ~30d of closes)
+
+
+def apply_trailing_stop(
+    base_stop: float,
+    avg_price: float,
+    extreme: float,
+    *,
+    is_short: bool = False,
+) -> float:
+    """Tighten ``base_stop`` once the favorable extreme clears the trigger.
+
+    LONG: if highwater ≥ avg×(1+trigger) → stop = max(base, hw×(1−lock)).
+    SHORT: if lowwater ≤ avg×(1−trigger) → stop = min(base, lw×(1+lock)).
+    Never LOOSENS the base stop; deterministic and idempotent.
+    """
+    if is_short:
+        if extreme <= avg_price * (1.0 - _TRAIL_TRIGGER):
+            return min(base_stop, extreme * (1.0 + _TRAIL_LOCK))
+        return base_stop
+    if extreme >= avg_price * (1.0 + _TRAIL_TRIGGER):
+        return max(base_stop, extreme * (1.0 - _TRAIL_LOCK))
+    return base_stop
+
+
+def _trail_extreme(
+    pit: "PITGateway",
+    ticker: str,
+    entry_date: date,
+    now: datetime,
+    *,
+    is_short: bool = False,
+) -> float | None:
+    """Favorable extreme of PIT daily closes since entry (bounded lookback).
+
+    Walks the last ``_TRAIL_LOOKBACK_DAYS`` weekdays (skipping days before
+    ``entry_date``), collecting ``price_close`` via PIT — deterministic, no
+    look-ahead, no persisted state.  Returns the max close for a long / min
+    for a short, or ``None`` when no closes are available (→ no trailing).
+    """
+    from datetime import timedelta  # noqa: PLC0415
+
+    closes: list[float] = []
+    seen = 0
+    day = now
+    while seen < _TRAIL_LOOKBACK_DAYS:
+        day = day - timedelta(days=1)
+        if day.date() < entry_date:
+            break
+        if day.weekday() >= 5:  # weekend — no session
+            continue
+        seen += 1
+        px = pit.get("price_close", ticker, day)
+        if px is not None:
+            closes.append(float(px))
+    if not closes:
+        return None
+    return min(closes) if is_short else max(closes)
+
+
 def evaluate_triggers(
     *,
     avg_price: float,
@@ -108,6 +175,7 @@ def evaluate_triggers(
     now: datetime,
     reversal_threshold: float = 0.0,
     is_short: bool = False,
+    trail_extreme: float | None = None,
 ) -> ExitDecision | None:
     """Decide whether to exit a position this cycle (pure).
 
@@ -149,8 +217,15 @@ def evaluate_triggers(
     """
     # Priority 1: stop-loss (recomputed live from avg_price).  A long stops on a
     # fall THROUGH the level; a short stops on a rise THROUGH the (mirrored) level.
+    # Tier-3 #10: when ``trail_extreme`` (highwater close for a long / lowwater
+    # for a short, derived deterministically from PIT) is supplied, the stop is
+    # TIGHTENED to lock in gains once the position has run.
     if current_price is not None:
         stop_level = recompute_stop(avg_price, bucket, is_short=is_short)
+        if trail_extreme is not None:
+            stop_level = apply_trailing_stop(
+                stop_level, avg_price, trail_extreme, is_short=is_short
+            )
         if (current_price >= stop_level) if is_short else (current_price <= stop_level):
             return ExitDecision(reason="stop_loss")
 
@@ -450,6 +525,76 @@ def close_idea_on_sell_fill(
     return oid
 
 
+def close_all_monitored_for_ticker(
+    conn: sqlite3.Connection,
+    *,
+    order_row: sqlite3.Row | dict,
+    exit_price: float | None,
+    exit_as_of: datetime,
+    label_kind: str,
+    pit: "PITGateway",
+    advisor_id_for: Callable[[Idea], str],
+    advisor_confidence_for: Callable[[Idea], float] | None = None,
+    audit_path: str | None = None,
+    metrics=None,
+) -> str | None:
+    """Close the owning idea AND every other MONITORED idea on the ticker.
+
+    Tier-2 #5 (2026-07-02): a full exit closes the ENTIRE broker position, so
+    every MONITORED idea riding the ticker (original + add-ons — or the legacy
+    multi-idea churn case surfaced 2026-06-22) exits at the same price.  The
+    primary close resolves via ``order_row`` exactly as before; the sweep then
+    closes each remaining MONITORED idea by patching the row's ``idea_id`` so
+    per-idea attribution, labeling, and LookupError-retry semantics are all
+    unchanged.  A sweep member that can't label yet stays MONITORED and is
+    picked up by the existing close-out retry (which also calls this sweep).
+
+    Returns the primary close's outcome id (or None), mirroring
+    ``close_idea_on_sell_fill``.
+    """
+    primary_oid = close_idea_on_sell_fill(
+        conn,
+        order_row=order_row,
+        exit_price=exit_price,
+        exit_as_of=exit_as_of,
+        label_kind=label_kind,
+        pit=pit,
+        advisor_id_for=advisor_id_for,
+        advisor_confidence_for=advisor_confidence_for,
+        audit_path=audit_path,
+        metrics=metrics,
+    )
+
+    ticker = order_row["ticker"]
+    stragglers = conn.execute(
+        "SELECT idea_id FROM ideas "
+        "WHERE ticker = ? AND state = ? AND is_superseded = 0",
+        (ticker, IdeaState.MONITORED.value),
+    ).fetchall()
+    for row in stragglers:
+        patched = dict(order_row)  # sqlite3.Row and dict both convert cleanly
+        patched["idea_id"] = row["idea_id"]
+        oid = close_idea_on_sell_fill(
+            conn,
+            order_row=patched,
+            exit_price=exit_price,
+            exit_as_of=exit_as_of,
+            label_kind=label_kind,
+            pit=pit,
+            advisor_id_for=advisor_id_for,
+            advisor_confidence_for=advisor_confidence_for,
+            audit_path=audit_path,
+            metrics=metrics,
+        )
+        if oid is not None:
+            log.info(
+                "exit_monitor.multi_idea_sweep_closed",
+                idea_id=row["idea_id"], ticker=ticker, label_kind=label_kind,
+            )
+
+    return primary_oid
+
+
 # ---------------------------------------------------------------------------
 # Close-out retry sweep
 # ---------------------------------------------------------------------------
@@ -552,7 +697,7 @@ def _retry_stranded_closeouts(
             continue
 
         idea_id_before = _resolve_idea_id(conn, buy_row)
-        oid = close_idea_on_sell_fill(
+        oid = close_all_monitored_for_ticker(
             conn,
             order_row=buy_row,
             exit_price=None,  # fall back to PIT close for the exit price
@@ -690,6 +835,15 @@ def run_exit_monitor(
 
         current_stance = stance_by_ticker.get(ticker)
 
+        # Tier-3 #10: deterministic trailing extreme from PIT closes (bounded
+        # lookback; None → no trailing this cycle, base stop still applies).
+        try:
+            trail = _trail_extreme(pit, ticker, entry_date, now, is_short=is_short)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("exit_monitor.trail_extreme_failed",
+                        ticker=ticker, error=str(exc))
+            trail = None
+
         decision = evaluate_triggers(
             avg_price=position.avg_price,
             bucket=bucket,
@@ -699,6 +853,7 @@ def run_exit_monitor(
             now=now,
             reversal_threshold=reversal_threshold,
             is_short=is_short,
+            trail_extreme=trail,
         )
         if decision is None:
             continue
@@ -777,7 +932,7 @@ def run_exit_monitor(
             # Capture the idea_id BEFORE close-out flips it out of MONITORED
             # (the (ticker,bucket) fallback join filters on MONITORED).
             idea_id_before = _resolve_idea_id(conn, order_row)
-            oid = close_idea_on_sell_fill(
+            oid = close_all_monitored_for_ticker(
                 conn,
                 order_row=order_row,
                 exit_price=exit_price,

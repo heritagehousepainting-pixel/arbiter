@@ -184,7 +184,7 @@ class ResolvedOutcome:
     stance_score: float        # advisor's ACTUAL directional forecast in [-1,1]; Brier forecast (#5a)
     abstained: bool
     horizon_days: int
-    label_kind: str            # "normal"|"early_exit"|"reversal"|"corporate_event"|"partial"
+    label_kind: str            # "normal"|"early_exit"|"reversal"|"corporate_event"|"partial"|"counterfactual"
 
     def __post_init__(self) -> None:
         # Clamp the two bounded fields to their contract ranges (E1).  An

@@ -105,12 +105,14 @@ from arbiter.engine.advisors import (
     _build_a1_congress_fn,
     _build_a1_fund_fn,
     _build_a1_insider_fn,
+    _build_a1_sell_fn,
     _build_a2_mirofish_fn,
     _us_market_open,
 )
 from arbiter.engine import learning as _learning
 from arbiter.engine import reconcile as _reconcile
 from arbiter.engine import safety_ops as _safety_ops
+from arbiter.signals.detection import SignalType as _SignalType
 
 log = structlog.get_logger(__name__)
 
@@ -358,22 +360,27 @@ class Engine:
         Lane-13 idea→advisor eligibility — out of scope for #4 (R2)."""
         return _learning.eligible_by_advisor(self, outcomes_by_advisor)
 
-    def _gather_a3_opinions(self) -> list[Opinion]:
+    def _gather_a3_opinions(self, tickers: list[str] | None = None) -> list[Opinion]:
         """Gather corroborated A3 (news) opinions for this cycle (fail-closed).
 
-        Delegates to ``arbiter.adapters.a3.gather_a3_opinions`` over the default
-        watchlist.  That function self-gates: it returns ``[]`` when
-        ``finnhub_api_key`` is unset and under a ``BacktestClock`` (no network /
-        no look-ahead), and never raises.  We still wrap in a guard so any
-        unexpected A3 failure can never abort the trading cycle.
+        Delegates to ``arbiter.adapters.a3.gather_a3_opinions``.  ``tickers``
+        selects the sweep set (Tier-3 #12 catalyst gate); ``None`` falls back
+        to the full default watchlist (legacy behavior).  The adapter
+        self-gates: it returns ``[]`` when ``finnhub_api_key`` is unset and
+        under a ``BacktestClock`` (no network / no look-ahead), and never
+        raises.  We still wrap in a guard so any unexpected A3 failure can
+        never abort the trading cycle.
         """
         try:
             from arbiter.adapters.a3 import gather_a3_opinions  # noqa: PLC0415
-            from arbiter.ingest.runner import _DEFAULT_WATCHLIST  # noqa: PLC0415
 
-            return gather_a3_opinions(
-                self.conn, self.clock, self.config, list(_DEFAULT_WATCHLIST)
-            )
+            if tickers is None:
+                from arbiter.ingest.runner import _DEFAULT_WATCHLIST  # noqa: PLC0415
+
+                tickers = list(_DEFAULT_WATCHLIST)
+            if not tickers:
+                return []
+            return gather_a3_opinions(self.conn, self.clock, self.config, tickers)
         except Exception as exc:  # noqa: BLE001
             log.warning("engine.a3.gather_failed", error=str(exc))
             return []
@@ -498,20 +505,77 @@ class Engine:
         # ideas that are already live from a prior run.
         active_ideas = idea_store.load_active_ideas(self.conn)
 
-        # Build the set of currently-held tickers so we don't generate a fresh
-        # BUY idea for a name we already hold ("don't double-buy held names").
-        held_tickers: set[str] = set(self.executor.get_positions().keys())
+        # Build the set of currently-held tickers.  A held name normally blocks
+        # a fresh idea ("don't double-buy") — UNLESS the add-on gate passes
+        # (Tier-2 #5, 2026-07-02): per-name cap headroom remains AND we haven't
+        # already opened/added the name today.  The ORDER side is checked at
+        # submit time (an add must match the held side; a mismatch still hits
+        # the broker dedup exactly as before).
+        held_positions = self.executor.get_positions()
+        held_tickers: set[str] = set(held_positions.keys())
+        _addon_name_cap = self.config.max_position_pct * float(account.equity)
+        _addon_min_notional = 25.0  # no dust adds
+
+        def _addon_ok(ticker: str) -> bool:
+            """True when a HELD ticker may take a fresh add-on idea."""
+            snap = held_positions.get(ticker)
+            if snap is None:
+                return False
+            held_notional = abs(snap.shares * snap.avg_price)
+            headroom = _addon_name_cap - held_notional
+            if headroom < _addon_min_notional:
+                return False
+            # Daily cooldown: at most one opening order (non-exit) per ticker
+            # per day, regardless of advisor set.
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS c FROM orders WHERE ticker = ? "
+                "AND entry_date = ? "
+                "AND json_extract(exits_json, '$.exit_label_kind') IS NULL",
+                (ticker, now.date().isoformat()),
+            ).fetchone()
+            if int(row["c"] if "c" in row.keys() else row[0]) > 0:
+                return False
+            _audit_mod.audit(
+                "engine.run_cycle.addon_candidate",
+                {
+                    "ticker": ticker,
+                    "held_notional": held_notional,
+                    "name_cap_headroom": headroom,
+                },
+                ts=now.isoformat(),
+                audit_path=self.config.audit_path,
+            )
+            return True
+
+        # Detect what signals exist to build ideas — BEFORE the A3 gather so
+        # the catalyst gate below can see this cycle's fresh filing tickers.
+        signals = detect_signals(self.conn, now)
 
         # A3 (news) — gather corroborated free-news opinions up front so they can
         # spawn their OWN short-horizon ideas (A3 has no filing in detect_signals,
         # so without this it could never trade or earn trust).  Self-gating in
         # adapters.a3: returns [] without FINNHUB_API_KEY and under a BacktestClock
         # (no network / no look-ahead); never raises.
-        a3_opinions = self._gather_a3_opinions()
+        #
+        # Tier-3 #12 (2026-07-02): the sweep is CATALYST-GATED — only tickers
+        # that are held, carry a fresh filing signal this cycle, or have an
+        # active idea.  The previous full-watchlist sweep (138 names) took
+        # 30+ min per full cycle under Finnhub's free-tier rate limit and
+        # starved the daemon's stop-checks meanwhile.  Escape hatch: set
+        # ``a3_catalyst_only = False`` on config to restore the full sweep.
+        if getattr(self.config, "a3_catalyst_only", True):
+            catalyst: set[str] = set(held_tickers)
+            catalyst.update(s.ticker for s in signals)
+            catalyst.update(i.ticker for i in active_ideas)
+            log.info(
+                "engine.a3.catalyst_gate",
+                n_catalyst=len(catalyst),
+                as_of=now.isoformat(),
+            )
+            a3_opinions = self._gather_a3_opinions(sorted(catalyst))
+        else:
+            a3_opinions = self._gather_a3_opinions()
         a4_opinions = self._gather_a4_opinions()
-
-        # Detect what signals exist to build ideas.
-        signals = detect_signals(self.conn, now)
         if not signals and not a3_opinions and not a4_opinions:
             log.info("engine.run_cycle.no_signals", as_of=now.isoformat())
             return CycleResult(ideas_processed=0)
@@ -522,8 +586,8 @@ class Engine:
         for sig in signals:
             if sig.ticker in seen_tickers:
                 continue
-            # Skip signals for tickers we already hold — avoid double-buying.
-            if sig.ticker in held_tickers:
+            # A held ticker blocks a fresh idea UNLESS the add-on gate passes.
+            if sig.ticker in held_tickers and not _addon_ok(sig.ticker):
                 log.info(
                     "engine.run_cycle.skip_held_ticker",
                     ticker=sig.ticker,
@@ -535,7 +599,13 @@ class Engine:
             # form13d MUST map to 180 so the 180-day A1.activist opinion links
             # to its idea by typed (ticker, HorizonBucket) in
             # _persist_cycle_opinions (a 90-day mismatch would orphan it).
-            horizon = 180 if sig.source in ("form4", "form13d", "form13f") else 90
+            # Tier-3 #9: SELL-cluster signals emit 90d MEDIUM opinions
+            # regardless of source — the idea horizon MUST match or the
+            # opinion orphans (same linkage rule).
+            if sig.signal_type in (_SignalType.CLUSTER_SELL, _SignalType.CONGRESS_SELL):
+                horizon = 90
+            else:
+                horizon = 180 if sig.source in ("form4", "form13d", "form13f") else 90
             idea = make_idea(
                 ticker=sig.ticker,
                 thesis=f"{sig.signal_type.value} on {sig.ticker}",
@@ -552,7 +622,7 @@ class Engine:
         # the opinion's own bucket so it never orphans (the attribution bug we
         # caught in audit).  A3 sizes SMALL and is governed by the learning loop.
         for op in a3_opinions:
-            if op.ticker in held_tickers:
+            if op.ticker in held_tickers and not _addon_ok(op.ticker):
                 continue
             if op.ticker not in seen_tickers:
                 seen_tickers.add(op.ticker)
@@ -566,9 +636,9 @@ class Engine:
             live_advisor_count += 1
 
         for op in a4_opinions:
-            if op.ticker in held_tickers:
-                # Skip macro opinions on tickers we already hold (avoid double-buying);
-                # A4 only spawns NEW short-horizon ideas for unheld tickers.
+            if op.ticker in held_tickers and not _addon_ok(op.ticker):
+                # Skip macro opinions on held tickers without add-on headroom;
+                # A4 otherwise spawns short-horizon ideas like any advisor.
                 continue
             if op.ticker not in seen_tickers:
                 seen_tickers.add(op.ticker)
@@ -712,6 +782,19 @@ class Engine:
             if spread_val is not None:
                 spread = float(spread_val)
 
+            # Tier-2 #5: an order on a HELD ticker whose side MATCHES the held
+            # side is an add-on (long+BUY / short+SELL) → skip the broker
+            # position-dedup.  A MISMATCHED side (e.g. non-exit SELL on a held
+            # long would net the position at Alpaca and corrupt the idea
+            # lifecycle) keeps is_addon=False and is blocked by the broker
+            # dedup exactly as before.
+            _held_snap = held_positions.get(order.ticker)
+            _is_addon = (
+                _held_snap is not None
+                and _held_snap.shares != 0.0
+                and (_held_snap.shares > 0.0) == (order.side.value == "BUY")
+            )
+
             # Critical condition (c): broker-fatal error → fire alert + re-raise so
             # cycle.py's BrokerError name-check can halt remaining submissions.
             from arbiter.execution.alpaca_adapter import BrokerError  # noqa: PLC0415
@@ -725,6 +808,8 @@ class Engine:
                     raw_price=raw_price,
                     breaker=self.breaker,
                     audit_path=_audit_path,
+                    is_addon=_is_addon,
+                    allow_fractional=self.config.allow_fractional,
                 )
             except BrokerError as exc:
                 _broker_fatal.append(str(exc))
@@ -940,6 +1025,22 @@ class Engine:
         except Exception as exc:  # noqa: BLE001
             log.error("engine.run_cycle.outcome_sweep_failed", error=str(exc))
 
+        # Tier-2 #8 — counterfactually label decided-but-never-executed ideas
+        # whose horizon elapsed, then ABANDON them (unblocks the ticker and
+        # feeds the learning loop the advisor's falsifiable call).
+        try:
+            outcome_runner.run_unexecuted_sweep(
+                self.conn,
+                pit=self.pit,
+                clock=self.clock,
+                advisor_id_for=_advisor_id_for,
+                advisor_confidence_for=None,
+                audit_path=self.config.audit_path,
+                metrics=self._metrics,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error("engine.run_cycle.unexecuted_sweep_failed", error=str(exc))
+
         log.info(
             "engine.run_cycle.done",
             ideas_processed=result.ideas_processed,
@@ -1100,6 +1201,15 @@ def build_engine(
         "A1.congress": _build_a1_congress_fn(config.db_path, pit, clock),
         "A1.activist": _build_a1_activist_fn(config.db_path, pit, clock),
         "A1.fund": _build_a1_fund_fn(config.db_path, pit, clock),
+        # Tier-3 #9 — the bearish disclosure legs (cluster sells).  Separate
+        # advisor ids so the learning loop scores sell-signal quality on its
+        # own track record; probationary EQUAL_FLOOR like every new advisor.
+        "A1.insider_sell": _build_a1_sell_fn(
+            config.db_path, pit, clock, signal_type=_SignalType.CLUSTER_SELL
+        ),
+        "A1.congress_sell": _build_a1_sell_fn(
+            config.db_path, pit, clock, signal_type=_SignalType.CONGRESS_SELL
+        ),
     }
 
     # -- A2 (MiroFish) channel — per-idea, list-valued (NOT in advisor_map) ---

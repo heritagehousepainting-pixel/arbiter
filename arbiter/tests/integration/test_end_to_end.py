@@ -332,7 +332,7 @@ def test_status_returns_correct_fields(engine_and_conn):
     assert info["is_sim"] is True
     assert info["executor"] == "sim"
     assert "advisor_count" in info
-    assert info["advisor_count"] == 4
+    assert info["advisor_count"] == 6  # 4 buy-side A1 + 2 sell legs (Tier-3 #9)
     assert "A1.insider" in info["advisors"]
     assert "A1.congress" in info["advisors"]
     assert "A1.activist" in info["advisors"]

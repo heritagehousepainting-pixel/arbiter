@@ -28,6 +28,27 @@ if str(_PROJECT_ROOT) not in sys.path:
 for _hermetic_key in ("ALERT_WEBHOOK_URL", "KILL_SWITCH_URL"):
     os.environ[_hermetic_key] = ""
 
+# Same leak class, different symptom (2026-07-02): tests that assert on config
+# defaults were breaking whenever the OPERATOR tuned the live .env (e.g.
+# ARBITER_MAX_OPEN_POSITIONS 8→12, ALPACA_DATA_FEED iex→sip).  Tests must run
+# against the DOCUMENTED defaults, not the live operator's tuning knobs — a
+# test that needs a specific value should monkeypatch.setenv it explicitly.
+# Empty-but-PRESENT blocks ``_load_dotenv``'s setdefault, and every ``_env_*``
+# helper treats "" as unset → the toml/code default applies.
+for _hermetic_key in (
+    "ARBITER_MAX_OPEN_POSITIONS",
+    "ARBITER_MAX_GROSS_PCT",
+    "ARBITER_MAX_POSITION_PCT",
+    "ARBITER_MAX_SECTOR_PCT",
+    "ARBITER_ADV_CAP_PCT",
+    "ARBITER_ALLOW_FRACTIONAL",
+    "ARBITER_FULL_CYCLE_TIMES_ET",
+):
+    os.environ[_hermetic_key] = ""
+# ALPACA_DATA_FEED is read via plain ``os.getenv(name, "iex")`` (no ""-is-unset
+# coercion), so pin the documented default explicitly.
+os.environ["ALPACA_DATA_FEED"] = "iex"
+
 
 # Real infra hosts that must never receive a packet from the test suite.
 _BLOCKED_ALERT_HOSTS = ("ntfy.sh", "workers.dev")

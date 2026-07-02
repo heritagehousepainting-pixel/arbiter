@@ -89,6 +89,7 @@ _SECTOR_BY_TICKER: dict[str, str] = {
     "PANW": "Information Technology",  # Palo Alto Networks
     "SNPS": "Information Technology",  # Synopsys
     "CDNS": "Information Technology",  # Cadence Design Systems
+    "GRMN": "Information Technology",  # Garmin — GICS Electronic Equipment (reclassified from Cons. Disc. 2018)
     # --- Communication Services ---
     "GOOGL": "Communication Services",
     "GOOG": "Communication Services",
@@ -149,6 +150,7 @@ _SECTOR_BY_TICKER: dict[str, str] = {
     "CB": "Financials",  # Chubb
     "PGR": "Financials",  # Progressive
     "PYPL": "Financials",  # PayPal (GICS: Financials)
+    "JHG": "Financials",  # Janus Henderson — asset management
     # --- Health Care ---
     "UNH": "Health Care",
     "JNJ": "Health Care",

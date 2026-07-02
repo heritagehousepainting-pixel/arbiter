@@ -17,9 +17,14 @@ from arbiter.contract.seams import Idea
 from arbiter.data.clock import BacktestClock, Clock
 from arbiter.data.pit import PITGateway
 from arbiter.db.connection import get_connection
-from arbiter.signals.detection import detect_signals
+from arbiter.signals.detection import SignalType, detect_signals
 from arbiter.signals.emit import emit_opinion
 from arbiter.signals.scoring import score_signal
+
+# Tier-3 #9 — signal types owned by the SELL advisors; the buy builders must
+# exclude them (a max-conviction pick mixing sides would emit under the wrong
+# advisor id).
+_SELL_TYPES = (SignalType.CLUSTER_SELL, SignalType.CONGRESS_SELL)
 
 log = structlog.get_logger(__name__)
 
@@ -63,8 +68,11 @@ def _build_a1_insider_fn(
         thread_conn = get_connection(db_path)
         try:
             signals = detect_signals(thread_conn, as_of, cluster_min_people=2)
-            # Filter to form4 signals only.
-            form4_signals = [s for s in signals if s.source == "form4"]
+            # Filter to form4 BUY-side signals only (sells → A1.insider_sell).
+            form4_signals = [
+                s for s in signals
+                if s.source == "form4" and s.signal_type not in _SELL_TYPES
+            ]
             if not form4_signals:
                 return None
             # Take the highest-conviction signal.
@@ -93,11 +101,46 @@ def _build_a1_congress_fn(
         thread_conn = get_connection(db_path)
         try:
             signals = detect_signals(thread_conn, as_of, cluster_min_people=2)
-            # Filter to congress signals only.
-            congress_signals = [s for s in signals if s.source == "congress"]
+            # Filter to congress BUY-side signals only (sells → A1.congress_sell).
+            congress_signals = [
+                s for s in signals
+                if s.source == "congress" and s.signal_type not in _SELL_TYPES
+            ]
             if not congress_signals:
                 return None
             best = max(congress_signals, key=lambda s: s.conviction_score)
+            score_bundle = score_signal(best, as_of)
+            return emit_opinion(best, as_of, score_bundle)
+        finally:
+            thread_conn.close()
+
+    return _fn
+
+
+def _build_a1_sell_fn(
+    db_path: str,
+    pit: PITGateway,
+    clock: Clock,
+    *,
+    signal_type: SignalType,
+) -> Callable[[], Opinion | None]:
+    """Return a zero-arg callable for a SELL-side advisor (Tier-3 #9).
+
+    ``signal_type`` selects the leg: ``CLUSTER_SELL`` → A1.insider_sell,
+    ``CONGRESS_SELL`` → A1.congress_sell (emit maps type → advisor id).
+    Fresh SQLite connection per call — same thread-safe pattern as the
+    other A1 builders.
+    """
+
+    def _fn() -> Opinion | None:
+        as_of: datetime = clock.now()
+        thread_conn = get_connection(db_path)
+        try:
+            signals = detect_signals(thread_conn, as_of, cluster_min_people=2)
+            sell_signals = [s for s in signals if s.signal_type == signal_type]
+            if not sell_signals:
+                return None
+            best = max(sell_signals, key=lambda s: s.conviction_score)
             score_bundle = score_signal(best, as_of)
             return emit_opinion(best, as_of, score_bundle)
         finally:

@@ -69,6 +69,7 @@ class DaemonState:
 
     last_ingest_date: Any = None        # date of the last ingest
     fired_full_slots: set = field(default_factory=set)  # (date, (h, m)) already run
+    last_monday_refresh_date: Any = None  # ET date of the last macro scan (Tier-3 #11)
     last_session_open: bool | None = None  # for open→closed transition detection
     backoff_s: float = 0.0
     consecutive_recoveries: int = 0     # auto-recoveries since the last clean iteration
@@ -307,6 +308,9 @@ def run_daemon(
 
             session = calendar.session(now)
 
+            # Tier-3 #11: Monday pre-market macro scan (was never scheduled).
+            _maybe_monday_refresh(engine, now, state)
+
             if session.is_open:
                 # FULL cycle at configured ET slots (ingest + entries + reversal).
                 for slot in _due_full_slots(now, full_times, state):
@@ -356,6 +360,43 @@ def isinstance_adapter(engine: Any) -> bool:
     from arbiter.execution.alpaca_adapter import AlpacaAdapter  # noqa: PLC0415
 
     return isinstance(engine.executor, AlpacaAdapter)
+
+
+def _maybe_monday_refresh(engine: Any, now: datetime, state: DaemonState) -> None:
+    """Run the Monday macro scan from the daemon (Tier-3 #11, 2026-07-02).
+
+    ``arbiter monday-refresh`` previously existed ONLY as a manual CLI command
+    — nothing scheduled it, so ``macro_findings`` stayed empty and A4.macro
+    never emitted an opinion.  Fires on Mondays in the 08:00–09:30 ET
+    pre-market window, once per ET date (in-memory dedup: a KeepAlive restart
+    that morning re-runs at worst once; the findings store is idempotent-ish
+    and the scan is read-only against markets).  Fail-safe: any error is
+    logged + alerted, never crashes the loop.
+    """
+    et = _et_now(now)
+    if et.weekday() != 0:  # Monday only
+        return
+    if not (8 * 60 <= et.hour * 60 + et.minute < 9 * 60 + 30):
+        return
+    if state.last_monday_refresh_date == et.date():
+        return
+    state.last_monday_refresh_date = et.date()  # set FIRST — never tight-loop an LLM scan
+    try:
+        from arbiter.refresh.orchestrator import run_monday_refresh  # noqa: PLC0415
+
+        log.info("daemon.monday_refresh.start", as_of=now.isoformat())
+        run_monday_refresh(engine)
+        log.info("daemon.monday_refresh.done", as_of=now.isoformat())
+    except Exception as exc:  # noqa: BLE001
+        log.error("daemon.monday_refresh.failed", error=str(exc))
+        try:
+            engine.alerting.alert(
+                "warning",
+                f"Monday macro refresh failed in daemon: {exc}",
+                ctx={"as_of": now.isoformat()},
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _run_full_cycle(engine: Any, ingest_fn: Callable[[], Any] | None, now: datetime, state: DaemonState) -> None:

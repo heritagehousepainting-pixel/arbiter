@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from datetime import timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -180,6 +181,99 @@ def run_outcome_sweep(
         stored_ids.extend(oids)
 
     # 4. Return the stored outcome ids.
+    return stored_ids
+
+
+def run_unexecuted_sweep(
+    conn: sqlite3.Connection,
+    *,
+    pit: PITGateway,
+    clock: Clock,
+    advisor_id_for: Callable[[Idea], str],
+    advisor_confidence_for: Callable[[Idea], float] | None = None,
+    audit_path: str | Path | None = None,
+    metrics=None,
+) -> list[str]:
+    """Label horizon-elapsed FINAL_DECIDED ideas that never executed (Tier-2 #8).
+
+    A decided-but-unexecuted idea (sizing zeroed by a cap, zero-share skip,
+    order expired unfilled, position-count full) still embodies a falsifiable
+    advisor call — the council said "buy X" and the market then agreed or
+    didn't.  Before this sweep those ideas stranded in FINAL_DECIDED forever
+    (164 of 213 live ideas as of the 2026-07-02 review): no outcome, no
+    learning signal, and their ticker dedup-blocked.  Now, once the horizon
+    elapses, the idea is labeled COUNTERFACTUALLY with the same PIT machinery
+    as the MONITORED sweep (``label_kind="counterfactual"`` marks provenance)
+    and transitioned FINAL_DECIDED → ABANDONED (legal from any pre-EXECUTED
+    state), unblocking the ticker.
+
+    Eligibility guards:
+    - horizon elapsed: ``idea.as_of + horizon_days <= clock.now()``
+    - NOT owned by the trade lifecycle: no pending/partial/filled order row
+      references the idea (expired/rejected/sim_retired rows don't count).
+    - a ``LookupError`` from the labeler leaves the idea FINAL_DECIDED for
+      retry on a later sweep (same fail-safe as the MONITORED sweep).
+
+    Returns the stored outcome ids (may span multiple advisors per idea).
+    """
+    ideas = idea_store.load_ideas_by_state(conn, {IdeaState.FINAL_DECIDED})
+    if not ideas:
+        return []
+
+    now = clock.now()
+    stored_ids: list[str] = []
+    for idea in ideas:
+        if idea.as_of + timedelta(days=idea.horizon_days) > now:
+            continue  # horizon not yet elapsed
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM orders WHERE idea_id = ? "
+            "AND status IN ('pending', 'partial', 'filled')",
+            (idea.idea_id,),
+        ).fetchone()
+        if int(row["c"] if "c" in row.keys() else row[0]) > 0:
+            continue  # a live/filled order owns this idea's lifecycle
+
+        try:
+            oids = attribution.resolve_advisor_outcomes(
+                conn,
+                idea,
+                pit=pit,
+                cutoff_as_of=now,
+                label_kind="counterfactual",
+                audit_path=audit_path,
+                metrics=metrics,
+                fallback_advisor_id_for=advisor_id_for,
+                fallback_advisor_confidence_for=advisor_confidence_for,
+            )
+        except LookupError as exc:
+            logger.warning(
+                "outcome_runner: counterfactual label price unavailable for "
+                "idea %s (%s) — retrying on a later sweep: %s",
+                idea.idea_id,
+                idea.ticker,
+                exc,
+            )
+            continue
+
+        if not oids:
+            continue  # nothing written — leave FINAL_DECIDED for retry
+
+        idea_store.update_idea_state(
+            conn,
+            idea.idea_id,
+            IdeaState.ABANDONED,
+            updated_state_at=now,
+            audit_path=audit_path,
+        )
+        stored_ids.extend(oids)
+        logger.info(
+            "outcome_runner: counterfactual-closed unexecuted idea %s (%s), "
+            "%d outcome(s)",
+            idea.idea_id,
+            idea.ticker,
+            len(oids),
+        )
+
     return stored_ids
 
 

@@ -47,6 +47,7 @@ _HORIZON_DAYS_FORM4: int = 180    # LONG bucket (121–365)
 _HORIZON_DAYS_CONGRESS: int = 90  # MEDIUM bucket (31–120)
 _HORIZON_DAYS_ACTIVIST: int = 180  # LONG bucket (121–365)
 _HORIZON_DAYS_FUND: int = 180     # LONG bucket (121–365)
+_HORIZON_DAYS_SELL: int = 90      # MEDIUM — bearish theses act faster (Tier-3 #9)
 
 # Minimum combined_score to emit (below this → abstain).
 _MIN_COMBINED_SCORE: float = 0.50
@@ -63,6 +64,10 @@ _ADVISOR_ID_FORM4: str = "A1.insider"
 _ADVISOR_ID_CONGRESS: str = "A1.congress"
 _ADVISOR_ID_ACTIVIST: str = "A1.activist"
 _ADVISOR_ID_FUND: str = "A1.fund"
+# Tier-3 #9 — SEPARATE advisor ids for the sell legs so the learning loop
+# scores sell-signal quality independently of the (already-scored) buy legs.
+_ADVISOR_ID_FORM4_SELL: str = "A1.insider_sell"
+_ADVISOR_ID_CONGRESS_SELL: str = "A1.congress_sell"
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +115,16 @@ def emit_opinion(
         return None
 
     # --- Map source → advisor_id and horizon_days ---
-    if signal.source == "congress":
+    # Tier-3 #9: the SELL signal types map by TYPE (before source) to their own
+    # advisor ids, both at the 90d MEDIUM horizon (matching the idea bucket the
+    # engine builds for them — a mismatch would orphan the opinion).
+    if signal.signal_type == SignalType.CLUSTER_SELL:
+        advisor_id = _ADVISOR_ID_FORM4_SELL
+        horizon_days = _HORIZON_DAYS_SELL
+    elif signal.signal_type == SignalType.CONGRESS_SELL:
+        advisor_id = _ADVISOR_ID_CONGRESS_SELL
+        horizon_days = _HORIZON_DAYS_SELL
+    elif signal.source == "congress":
         advisor_id = _ADVISOR_ID_CONGRESS
         horizon_days = _HORIZON_DAYS_CONGRESS
     elif signal.source == "form13d":
@@ -139,11 +153,12 @@ def emit_opinion(
     raw_stance = max(signal.conviction_score, 0.1)
     stance_score = min(raw_stance, 1.0)
 
-    # A Schedule 13D/G EXIT or 13F trim/exit (txn_type='S') is a BEARISH signal
-    # — flip the sign.  All other A1 detectors only ever produce BUY
-    # (txn_type='P'), so the default positive stance above holds for them.
-    # validate_opinion accepts [-1.0, 1.0], so the negative stance passes.
-    if signal.meta.get("txn_type") == "S" and signal.source in ("form13d", "form13f"):
+    # Any 'S'-transaction signal is BEARISH — flip the sign: 13D/G exits, 13F
+    # trims/exits, and (Tier-3 #9) form4/congress cluster sells all carry
+    # ``meta["txn_type"]="S"``.  'P'-only detectors never set the key, so the
+    # default positive stance holds for them.  validate_opinion accepts
+    # [-1.0, 1.0], so the negative stance passes.
+    if signal.meta.get("txn_type") == "S":
         stance_score = -stance_score
 
     # --- Confidence from score_bundle or cold-start prior ---
@@ -157,11 +172,12 @@ def emit_opinion(
     # meaningless for a non-abstained opinion.
     confidence = max(confidence, 0.01)
 
-    # --- Build rationale ---
+    # --- Build rationale (side-aware: an 'S' signal is selling/reducing) ---
     n_people = len(signal.person_ids)
+    action = "selling/reducing" if signal.meta.get("txn_type") == "S" else "buying"
     rationale = (
         f"{signal.signal_type.value} on {signal.ticker}: "
-        f"{n_people} insider(s) buying in "
+        f"{n_people} insider(s) {action} in "
         f"{(signal.window_end - signal.window_start).days + 1}-day window; "
         f"conviction={signal.conviction_score:.3f}"
     )

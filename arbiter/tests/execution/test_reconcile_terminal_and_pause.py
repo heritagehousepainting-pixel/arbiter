@@ -152,3 +152,87 @@ def test_partial_then_full_fill_persists_filled_qty(tmp_path, monkeypatch):
     row = conn.execute("SELECT qty, status FROM orders WHERE order_id=?", (oid,)).fetchone()
     assert row["status"] == "filled"
     assert row["qty"] == 4.0, "full-fill must persist broker filled_qty, not the stale partial qty"
+
+
+# ---------------------------------------------------------------------------
+# Tier-2 #6 — unfilled OPENING order abandons its idea ("reprice-or-kill")
+# ---------------------------------------------------------------------------
+
+def _seed_idea(conn, *, ticker, state, bucket=HorizonBucket.MEDIUM):
+    from arbiter.contract.seams import Idea
+    from arbiter.orchestrator import idea_store
+    from arbiter.types import IdeaState
+
+    idea_id = generate_ulid()
+    idea = Idea(
+        idea_id=idea_id, ticker=ticker, thesis="t", horizon_days=75,
+        state=IdeaState.NASCENT, as_of=_AS_OF - timedelta(days=5),
+        dedupe_key=(ticker, bucket.value),
+    )
+    idea_store.persist_new_idea(conn, idea, created_at=_AS_OF)
+    conn.execute("UPDATE ideas SET state=? WHERE idea_id=?", (state.value, idea_id))
+    conn.commit()
+    return idea_id
+
+
+def test_expired_opening_order_abandons_idea(tmp_path, monkeypatch):
+    """An unfilled entry's idea is ABANDONED so the ticker can re-price fresh."""
+    from arbiter.types import IdeaState
+
+    fake = FakeAlpaca(fill_mode="pending")
+    eng, conn = _build(tmp_path, monkeypatch, fake)
+    idea_id = _seed_idea(conn, ticker="NVDA", state=IdeaState.FINAL_DECIDED)
+    oid = "ORD-EXP-1"
+    insert_row(conn, "orders", {
+        "order_id": oid, "dedup_hash": generate_ulid(),
+        "ticker": "NVDA", "side": OrderSide.BUY.value, "qty": 1.0,
+        "horizon_bucket": HorizonBucket.MEDIUM.value,
+        "entry_date": str(_AS_OF.date()),
+        "advisor_signature": "A1.insider:sig",
+        "exits_json": json.dumps({"stop_loss": 92.0}),  # opening: no exit_label_kind
+        "status": "pending", "created_at": _AS_OF.isoformat(),
+        "idea_id": idea_id,
+    })
+    fake.orders[oid] = {
+        "id": oid, "symbol": "NVDA", "qty": "1",
+        "filled_qty": "0", "filled_avg_price": None, "status": "expired",
+    }
+
+    eng._reconcile_pending_orders(_AS_OF)
+
+    assert conn.execute(
+        "SELECT status FROM orders WHERE order_id=?", (oid,)
+    ).fetchone()["status"] == "expired"
+    assert conn.execute(
+        "SELECT state FROM ideas WHERE idea_id=?", (idea_id,)
+    ).fetchone()["state"] == IdeaState.ABANDONED.value
+
+
+def test_expired_exit_order_keeps_idea_monitored(tmp_path, monkeypatch):
+    """An expired EXIT keeps its idea MONITORED (re-sell next cycle) — unchanged."""
+    from arbiter.types import IdeaState
+
+    fake = FakeAlpaca(fill_mode="pending")
+    eng, conn = _build(tmp_path, monkeypatch, fake)
+    idea_id = _seed_idea(conn, ticker="MS", state=IdeaState.MONITORED)
+    oid = "ORD-EXP-2"
+    insert_row(conn, "orders", {
+        "order_id": oid, "dedup_hash": generate_ulid(),
+        "ticker": "MS", "side": OrderSide.SELL.value, "qty": 1.0,
+        "horizon_bucket": HorizonBucket.MEDIUM.value,
+        "entry_date": str(_AS_OF.date()),
+        "advisor_signature": "A1.insider:sig",
+        "exits_json": json.dumps({"exit_label_kind": "early_exit"}),  # EXIT order
+        "status": "pending", "created_at": _AS_OF.isoformat(),
+        "idea_id": idea_id,
+    })
+    fake.orders[oid] = {
+        "id": oid, "symbol": "MS", "qty": "1",
+        "filled_qty": "0", "filled_avg_price": None, "status": "expired",
+    }
+
+    eng._reconcile_pending_orders(_AS_OF)
+
+    assert conn.execute(
+        "SELECT state FROM ideas WHERE idea_id=?", (idea_id,)
+    ).fetchone()["state"] == IdeaState.MONITORED.value
