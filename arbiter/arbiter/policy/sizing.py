@@ -70,6 +70,7 @@ def compute_size(
     current_sector_exposure: float = 0.0,
     current_gross_exposure: float = 0.0,
     current_open_positions: int = 0,
+    current_name_exposure: float = 0.0,
 ) -> float:
     """Compute final position size (notional USD) for one ticker.
 
@@ -101,6 +102,13 @@ def compute_size(
         Already-committed gross notional across all positions (USD).
     current_open_positions:
         Number of currently open positions.
+    current_name_exposure:
+        Already-committed notional to THIS ticker (USD) — nonzero only for an
+        ADD-ON to a held name (Tier-2 #5, 2026-07-02).  The per-name cap
+        becomes a headroom cap (``name_cap − current_name_exposure``) so the
+        combined position can never exceed ``max_position_pct``, and the
+        open-position-count gate is skipped (an add-on does not open a NEW
+        position).  Default 0.0 keeps every existing caller unchanged.
     """
     # Fail-closed: gate disallows trading
     if not gate_decision.allowed or gate_decision.size_multiplier == 0.0:
@@ -113,9 +121,11 @@ def compute_size(
     # Step 1: Quarter-Kelly raw size
     size = _quarter_kelly(fusion.conviction, portfolio_equity)
 
-    # Step 2: Per-name hard cap
+    # Step 2: Per-name hard cap — applied as HEADROOM so an add-on to a held
+    # name is bounded by the cap MINUS what's already committed to the ticker.
     name_cap = config.max_position_pct * portfolio_equity
-    size = min(size, name_cap)
+    name_headroom = max(0.0, name_cap - current_name_exposure)
+    size = min(size, name_headroom)
 
     # Step 3: Sector headroom cap
     sector_max = config.max_sector_pct * portfolio_equity
@@ -127,8 +137,10 @@ def compute_size(
     gross_headroom = max(0.0, gross_max - current_gross_exposure)
     size = min(size, gross_headroom)
 
-    # Step 5: Open-position count cap — if at capacity, no new positions
-    if current_open_positions >= config.max_open_positions:
+    # Step 5: Open-position count cap — if at capacity, no new positions.
+    # An ADD-ON (nonzero name exposure) does not open a NEW position, so the
+    # count gate does not apply to it.
+    if current_open_positions >= config.max_open_positions and current_name_exposure <= 0.0:
         return 0.0
 
     # Step 6: Gate size_multiplier

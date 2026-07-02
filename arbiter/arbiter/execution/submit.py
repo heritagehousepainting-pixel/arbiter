@@ -149,8 +149,10 @@ def submit_order(
     raw_price: float | None = None,
     breaker: "CircuitBreaker | None" = None,
     audit_path: str | None = None,
-    presized_shares: int | None = None,
+    presized_shares: float | None = None,
     is_exit: bool = False,
+    is_addon: bool = False,
+    allow_fractional: bool = False,
 ) -> SubmitResult:
     """Submit a PaperOrder through the executor with idempotency guarantees.
 
@@ -190,6 +192,16 @@ def submit_order(
         check would otherwise block every sell, since holding the position is
         the precondition).  Sell-side slippage (B1) is applied so the limit is
         biased DOWN.  A repeated identical SELL (same dedup_hash) stays blocked.
+    allow_fractional:
+        Tier-2 #4 (2026-07-02).  When True and the whole-share floor is 0
+        (stock price above the position notional), fall back to a FRACTIONAL
+        share qty (floored to 4 dp) instead of zero-share-skipping — rescues
+        high-priced tickers (TSLA/GOOGL/BRK.B) on small accounts.  Only fires
+        when the executor considers the asset fractionable (duck-typed
+        ``executor.is_fractionable(ticker)``; absent method = assumed yes) and
+        the notional is >= $1 (Alpaca's practical floor).  Default False so
+        the legacy whole-share-only behavior is preserved unless the engine
+        passes ``config.allow_fractional``.
 
     Returns
     -------
@@ -209,7 +221,9 @@ def submit_order(
     # 1. Idempotency check — local ledger + broker
     # ------------------------------------------------------------------
     try:
-        ensure_not_duplicate(order, conn, executor, dh=dh, is_exit=is_exit)
+        ensure_not_duplicate(
+            order, conn, executor, dh=dh, is_exit=is_exit, is_addon=is_addon
+        )
     except DuplicateOrderError as exc:
         log.info("submit_order.skip_duplicate", order_id=order.order_id, reason=str(exc))
         _audit(
@@ -250,17 +264,39 @@ def submit_order(
     #     - Default (entry BUY): order.qty is a DOLLAR NOTIONAL (quarter-Kelly
     #       USD from compute_size), NOT a share count.  Convert at the
     #       slippage-adjusted limit_price and floor to whole shares (spec A0).
-    #       Alpaca rejects fractional LIMIT orders, so whole-share rounding is a
-    #       correctness requirement, not just a guard.
+    #       Whole shares stay the primary path; when the floor is 0 and
+    #       ``allow_fractional`` is set, fall back to a fractional qty floored
+    #       to 4 dp.  (Alpaca DOES accept fractional market/limit DAY orders
+    #       in paper + live, up to 9 dp — docs "fractional-trading", verified
+    #       2026-07-02; the earlier "rejects fractional LIMIT" note here was
+    #       stale.)  The fallback is gated on the executor considering the
+    #       asset fractionable (duck-typed) and notional >= $1, and fails
+    #       closed to the legacy zero-share skip.
     #     - Exit SELL (presized_shares set, B3): order.qty is ALREADY a share
     #       count (the held position qty).  SKIP the A0 divide entirely and use
-    #       the presized share count directly.
+    #       the presized share count directly.  Kept as FLOAT — int() here
+    #       would truncate a fractional position to 0 and strand it unexitable.
     # ------------------------------------------------------------------
     notional = float(order.qty)
+    shares: float
     if presized_shares is not None:
-        shares = int(presized_shares)
+        shares = float(presized_shares)
     else:
-        shares = math.floor(notional / limit_price)
+        shares = float(math.floor(notional / limit_price))
+        if shares == 0.0 and allow_fractional and notional >= 1.0:
+            is_fractionable = getattr(executor, "is_fractionable", None)
+            if is_fractionable is None or is_fractionable(order.ticker):
+                # Floor (never round up) to 4 dp so we can't exceed notional.
+                shares = math.floor((notional / limit_price) * 10_000) / 10_000
+                if shares > 0.0:
+                    log.info(
+                        "submit_order.fractional_fallback",
+                        order_id=order.order_id,
+                        ticker=order.ticker,
+                        notional=notional,
+                        limit_price=limit_price,
+                        qty=shares,
+                    )
     if shares <= 0:
         log.info(
             "submit_order.zero_share_skip",

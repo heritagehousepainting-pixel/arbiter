@@ -281,7 +281,13 @@ class TestRunExitMonitorShort:
         idea_id, _ = _seed_short(
             conn, ticker="UBER", shares=-1, avg_price=72.0, bucket=HorizonBucket.MEDIUM,
             entry_date=_AS_OF.date() - timedelta(days=5), horizon_days=75)
-        pit, _ = _pit_with("UBER", close=72.0)  # at entry → no stop
+        pit, fx = _pit_with("UBER", close=72.0)  # at entry → no stop
+        # Tier-3 #10: seed flat RECENT closes too — the trailing-stop walk
+        # would otherwise read the fixture's ancient 22.0 early-history mark
+        # as a recent lowwater and arm the trail (fixture artifact; real
+        # daily bars are dense, so a 70% instant gap can't happen).
+        for d in range(2, 9):
+            fx.add("price_close", "UBER", _AS_OF - timedelta(days=d), 72.0)
         clock = BacktestClock(_AS_OF)
         closed = run_exit_monitor(conn, ex, pit, clock,
                                   stance_by_ticker={"UBER": 0.6},  # bullish flip

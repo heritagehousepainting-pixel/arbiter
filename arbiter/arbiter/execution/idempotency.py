@@ -129,6 +129,7 @@ def ensure_not_duplicate(
     *,
     dh: str | None = None,
     is_exit: bool = False,
+    is_addon: bool = False,
 ) -> None:
     """Check local ledger and broker for duplicates.
 
@@ -148,6 +149,14 @@ def ensure_not_duplicate(
         *precondition* for selling, not a duplicate signal.  Idempotency is
         enforced by the local-ledger check only (a live SELL row with the
         same dedup_hash blocks a repeated identical SELL across cycles).
+    is_addon:
+        When True this is an ADD-ON to a held name (Tier-2 #5, 2026-07-02):
+        the broker position-presence check is SKIPPED — accumulation is
+        intended, so the held position is not a duplicate signal.  The
+        LOCAL-LEDGER check still applies (a same-day identical order — same
+        ticker/side/horizon/entry_date/advisor set — stays blocked).  Sizing
+        bounds the combined position via the per-name headroom cap; the
+        engine additionally enforces a one-add-per-ticker-per-day cooldown.
 
     Raises
     ------
@@ -170,7 +179,9 @@ def ensure_not_duplicate(
 
     # EXIT SELLs skip the broker position-presence check: a held position is
     # the precondition for selling, so it must NOT be read as a duplicate.
-    if is_exit:
+    # ADD-ONs skip it too: accumulating a held name is intended (Tier-2 #5);
+    # the local-ledger check above still blocks same-day identical re-entry.
+    if is_exit or is_addon:
         return
 
     if _check_broker(executor, order.ticker):

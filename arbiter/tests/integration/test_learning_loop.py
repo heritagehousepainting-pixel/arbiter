@@ -39,6 +39,8 @@ INSIDER = "A1.insider"
 CONGRESS = "A1.congress"
 ACTIVIST = "A1.activist"
 FUND = "A1.fund"
+INSIDER_SELL = "A1.insider_sell"
+CONGRESS_SELL = "A1.congress_sell"
 
 
 def _engine(conn: sqlite3.Connection, as_of: datetime, *, equal_floor: float | None = None):
@@ -94,7 +96,7 @@ def test_T1_bootstrap_zero_outcomes_still_trades():
     wb, cal = eng._build_learning_inputs(T)
 
     # all registered A1 advisors present, floored, non-shadow
-    assert set(wb.weights.keys()) == {INSIDER, CONGRESS, ACTIVIST, FUND}
+    assert set(wb.weights.keys()) == {INSIDER, CONGRESS, ACTIVIST, FUND, INSIDER_SELL, CONGRESS_SELL}
     for aw in wb.weights.values():
         assert aw.shadow is False
         assert aw.weight > 0.0

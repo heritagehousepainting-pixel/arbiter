@@ -50,6 +50,9 @@ def _make_engine(tmp_path: Path):
         db_path=db_path, audit_path=str(tmp_path / "audit.jsonl"),
         metrics_path=str(tmp_path / "metrics.jsonl"),
         kill_switch_url="", alert_webhook_url="",
+        # This test proves news-only DISCOVERY spawns + links an idea — that
+        # path only exists with the Tier-3 #12 catalyst gate disabled.
+        a3_catalyst_only=False,
     )
     conn = get_connection(db_path)
     run_migrations(conn, applied_at=_AS_OF.isoformat())

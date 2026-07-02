@@ -37,6 +37,11 @@ class SignalType(str, Enum):
     CONGRESS_SECTOR = "congress_sector"
     ACTIVIST_STAKE = "activist_stake"
     FUND_HOLDING = "fund_holding"
+    # Tier-3 #9 (2026-07-02) — the bearish leg: cluster SELLING by insiders /
+    # Congress members.  Sells are noisier than buys (diversification, taxes),
+    # so detection requires one MORE distinct person than the buy clusters.
+    CLUSTER_SELL = "cluster_sell"
+    CONGRESS_SELL = "congress_sell"
 
 
 # Minimum number of distinct insiders for a cluster signal.
@@ -206,6 +211,26 @@ def detect_signals(
     congress_rows = conn.execute(congress_sql, params_base).fetchall()
 
     # -----------------------------------------------------------------------
+    # 2a. Fetch Form 4 + Congress SELL rows (Tier-3 #9 — the bearish leg).
+    # -----------------------------------------------------------------------
+    # Sells were previously never fetched (693 form4 + 302 congress 'S' rows
+    # sat unused as of 2026-07-02).  Cluster-selling by multiple insiders /
+    # members is a documented bearish leading indicator; single sells are NOT
+    # detected (diversification/tax noise).
+    form4_sell_rows = conn.execute(
+        "SELECT id, ticker, person_id, filing_ts, txn_type, amount_low, amount_high "
+        f"FROM filings WHERE {base_where} AND source = 'form4' AND txn_type = 'S' "
+        "ORDER BY filing_ts ASC",
+        params_base,
+    ).fetchall()
+    congress_sell_rows = conn.execute(
+        "SELECT id, ticker, person_id, filing_ts, txn_type, amount_low, amount_high "
+        f"FROM filings WHERE {base_where} AND source = 'congress' AND txn_type = 'S' "
+        "ORDER BY filing_ts ASC",
+        params_base,
+    ).fetchall()
+
+    # -----------------------------------------------------------------------
     # 2b. Fetch Schedule 13D/13G (activist / passive stake) rows.
     # -----------------------------------------------------------------------
     # NB: unlike form4/congress (P-only), activist rows include BOTH 'P'
@@ -273,6 +298,31 @@ def detect_signals(
     )
 
     # -----------------------------------------------------------------------
+    # 5b. Cluster SELL detection (Form 4 + Congress) — Tier-3 #9.
+    # -----------------------------------------------------------------------
+    # Noise filter: sells require one MORE distinct person than buy clusters.
+    signals.extend(
+        _detect_cluster_buys(
+            form4_sell_rows,
+            source="form4",
+            window_days=cluster_window_days,
+            min_people=cluster_min_people + 1,
+            as_of=as_of,
+            signal_type=SignalType.CLUSTER_SELL,
+        )
+    )
+    signals.extend(
+        _detect_cluster_buys(
+            congress_sell_rows,
+            source="congress",
+            window_days=cluster_window_days,
+            min_people=cluster_min_people + 1,
+            as_of=as_of,
+            signal_type=SignalType.CONGRESS_SELL,
+        )
+    )
+
+    # -----------------------------------------------------------------------
     # 6. Activist / passive stake detection (Schedule 13D / 13G).
     # -----------------------------------------------------------------------
     signals.extend(_detect_activist_stake(sc13_rows, as_of=as_of))
@@ -298,8 +348,15 @@ def _detect_cluster_buys(
     window_days: int,
     min_people: int,
     as_of: datetime,
+    signal_type: SignalType = SignalType.CLUSTER_BUY,
 ) -> list[Signal]:
-    """Detect cluster buy signals from a list of DB filing rows."""
+    """Detect cluster signals (buy by default; sells via ``signal_type``).
+
+    Tier-3 #9: the same sliding-window distinct-people machinery detects
+    cluster SELLING when called with ``signal_type=CLUSTER_SELL`` /
+    ``CONGRESS_SELL`` on txn_type='S' rows; the emitted signal carries
+    ``meta["txn_type"]="S"`` so emit flips the stance sign.
+    """
     # Group by ticker.
     by_ticker: dict[str, list] = {}
     for row in rows:
@@ -342,16 +399,23 @@ def _detect_cluster_buys(
 
             # Dedup: skip if we already emitted a signal with these exact filings.
             if any(
-                s.filing_ids == filing_ids and s.signal_type == SignalType.CLUSTER_BUY
+                s.filing_ids == filing_ids and s.signal_type == signal_type
                 for s in results
             ):
                 continue
 
             conviction = _cluster_conviction(len(people_in_window))
 
+            meta: dict = {
+                "n_buyers": len(people_in_window),
+                "window_days": window_days,
+            }
+            if signal_type in (SignalType.CLUSTER_SELL, SignalType.CONGRESS_SELL):
+                meta["txn_type"] = "S"  # emit flips the stance sign on this
+
             results.append(
                 Signal(
-                    signal_type=SignalType.CLUSTER_BUY,
+                    signal_type=signal_type,
                     ticker=ticker_sym,
                     source=source,
                     person_ids=person_ids,
@@ -359,10 +423,7 @@ def _detect_cluster_buys(
                     window_start=ts_i,
                     window_end=latest_ts,
                     conviction_score=conviction,
-                    meta={
-                        "n_buyers": len(people_in_window),
-                        "window_days": window_days,
-                    },
+                    meta=meta,
                     as_of=as_of,
                 )
             )

@@ -27,6 +27,8 @@ label_kind variants:
     "reversal"         — conviction flip triggered exit
     "corporate_event"  — halted by M&A, delisting, trading halt, etc.
     "partial"          — partial fill / data gap
+    "counterfactual"   — decided but never executed; labeled at horizon so the
+                         advisor's call still teaches the loop (Tier-2 #8)
 
 All prices come via PIT (no look-ahead). No datetime.now() calls.
 """
@@ -55,6 +57,7 @@ LABEL_KINDS = frozenset({
     "reversal",
     "corporate_event",
     "partial",
+    "counterfactual",
 })
 
 _SPY = "SPY"

@@ -253,6 +253,88 @@ def mark_order_terminal(engine: "Engine", order_row, report, now: datetime) -> N
         audit_path=engine.config.audit_path,
     )
 
+    # Tier-2 #6 (2026-07-02) — "reprice-or-kill" for unfilled entries.  A
+    # terminal OPENING order (day limit expired/cancelled/rejected unfilled)
+    # used to leave its idea FINAL_DECIDED forever: the active-idea dedup then
+    # blocked every future idea on the ticker, so the council's conviction
+    # silently died (5 of the first 20 live entries — NVDA/RTX/BLSH/PYPL/UBER).
+    # ABANDON the owning idea instead: the ticker unblocks, and the next cycle
+    # a still-live signal spawns a FRESH idea priced at the CURRENT market —
+    # that fresh limit is the "reprice"; the abandon is the "kill".  Expired
+    # EXIT orders keep their existing semantics (idea stays MONITORED; the
+    # monitor re-sells next cycle with a fresh nonce).
+    from arbiter.execution.exit_monitor import is_exit_order  # noqa: PLC0415
+
+    if not is_exit_order(order_row):
+        _abandon_idea_for_unfilled_entry(engine, order_row, now)
+
+
+def _abandon_idea_for_unfilled_entry(engine: "Engine", order_row, now: datetime) -> None:
+    """Abandon the pre-MONITORED idea owning a terminal unfilled OPENING order."""
+    from arbiter.orchestrator import idea_store  # noqa: PLC0415
+
+    # Resolve by explicit idea_id link first (migration 023), then by the
+    # (ticker, bucket) join over pre-MONITORED states for legacy NULL rows.
+    idea_id = None
+    try:
+        idea_id = order_row["idea_id"]
+    except (KeyError, IndexError):
+        idea_id = None
+    if idea_id:
+        row = engine.conn.execute(
+            "SELECT idea_id, state FROM ideas "
+            "WHERE idea_id = ? AND is_superseded = 0",
+            (idea_id,),
+        ).fetchone()
+        if row is None or str(row["state"]) not in (
+            IdeaState.FINAL_DECIDED.value,
+            IdeaState.PROVISIONAL_DECIDED.value,
+        ):
+            idea_id = None  # already advanced/closed — nothing to abandon
+    if idea_id is None:
+        row = engine.conn.execute(
+            "SELECT idea_id FROM ideas "
+            "WHERE is_superseded = 0 AND dedupe_key_ticker = ? "
+            "AND dedupe_key_bucket = ? AND state = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (
+                order_row["ticker"],
+                order_row["horizon_bucket"],
+                IdeaState.FINAL_DECIDED.value,
+            ),
+        ).fetchone()
+        idea_id = row["idea_id"] if row is not None else None
+    if idea_id is None:
+        return
+
+    try:
+        idea_store.update_idea_state(
+            engine.conn, idea_id, IdeaState.ABANDONED,
+            updated_state_at=now, audit_path=engine.config.audit_path,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.error(
+            "engine.reconcile_pending.abandon_failed",
+            order_id=order_row["order_id"], idea_id=idea_id, error=str(exc),
+        )
+        return
+    log.info(
+        "engine.reconcile_pending.unfilled_entry_abandoned",
+        order_id=order_row["order_id"],
+        ticker=order_row["ticker"],
+        idea_id=idea_id,
+    )
+    _audit_mod.audit(
+        "order.unfilled_entry_idea_abandoned",
+        {
+            "order_id": order_row["order_id"],
+            "ticker": order_row["ticker"],
+            "idea_id": idea_id,
+        },
+        ts=now.isoformat(),
+        audit_path=engine.config.audit_path,
+    )
+
 
 def close_out_filled_sell(engine: "Engine", order_row, report, now: datetime) -> None:
     """Close out a filled/partial SELL by driving the idea lifecycle (B4).
@@ -281,7 +363,10 @@ def close_out_filled_sell(engine: "Engine", order_row, report, now: datetime) ->
         return "A1.insider" if idea.horizon_days >= 180 else "A1.congress"
 
     try:
-        exit_monitor.close_idea_on_sell_fill(
+        # Tier-2 #5: a FULL exit closes the whole broker position, so sweep
+        # EVERY MONITORED idea on the ticker (original + add-ons), not just
+        # the one resolved from this order row.
+        exit_monitor.close_all_monitored_for_ticker(
             engine.conn,
             order_row=order_row,
             exit_price=report.avg_fill_price,

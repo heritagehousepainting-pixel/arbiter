@@ -122,6 +122,10 @@ class AlpacaAdapter(Executor):
     http_post: Any = field(default=_default_http_post)
     http_get: Any = field(default=_default_http_get)
     http_delete: Any = field(default=_default_http_delete)
+    # Per-instance cache for is_fractionable (asset flag is static).
+    _fractionable_cache: dict[str, bool] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -338,6 +342,30 @@ class AlpacaAdapter(Executor):
                     avg_price=float(pos.get("avg_entry_price", 0.0)),
                 )
         return positions
+
+    def is_fractionable(self, ticker: str) -> bool:
+        """Whether Alpaca marks the asset fractionable (Tier-2 #4).
+
+        Consulted by ``submit_order`` before the fractional-share fallback.
+        Cached per adapter instance (asset fractionability is static).
+        Fail-closed: on any fetch/parse error return False WITHOUT caching, so
+        the caller degrades to the legacy zero-share skip instead of risking a
+        422 rejection that would trip the broker_non_200 breaker.
+        """
+        cached = self._fractionable_cache.get(ticker)
+        if cached is not None:
+            return cached
+        url = f"{self._base()}/v2/assets/{ticker}"
+        try:
+            data = self.http_get(url, self._headers())
+            result = bool(data.get("fractionable", False))
+        except Exception as exc:
+            log.warning(
+                "alpaca_adapter.is_fractionable_failed", ticker=ticker, error=str(exc)
+            )
+            return False
+        self._fractionable_cache[ticker] = result
+        return result
 
     def get_account(self) -> AccountSnapshot:
         """Return account snapshot from Alpaca."""

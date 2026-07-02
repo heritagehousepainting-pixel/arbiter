@@ -82,6 +82,7 @@ def decide(
     current_sector_exposure: float = 0.0,
     current_gross_exposure: float = 0.0,
     current_open_positions: int = 0,
+    current_name_exposure: float = 0.0,
     entry_price: float = 100.0,
 ) -> list[PaperOrder]:
     """Produce PaperOrders for one ticker across all active horizon buckets.
@@ -115,6 +116,10 @@ def decide(
         Already-committed gross notional (USD).
     current_open_positions:
         Number of currently open positions.
+    current_name_exposure:
+        Already-committed notional to THIS ticker (USD); nonzero only for an
+        add-on to a held name (Tier-2 #5).  Sizing caps the add-on at the
+        per-name headroom.
     entry_price:
         Reference price for stop-loss computation.  Callers should pass
         the PIT open price from Lane 3 (not market data directly).
@@ -152,6 +157,7 @@ def decide(
             current_sector_exposure=current_sector_exposure,
             current_gross_exposure=current_gross_exposure,
             current_open_positions=current_open_positions,
+            current_name_exposure=current_name_exposure,
         )
 
         if size <= 0.0:

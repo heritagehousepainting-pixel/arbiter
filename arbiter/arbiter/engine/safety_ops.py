@@ -206,6 +206,16 @@ def seed_risk_book(engine: "Engine", now: datetime) -> RiskBook:
     exposure on the FIRST order of the cycle (previously the book was empty
     and the three book-aware caps never bound — A2 P0).  The engine folds
     each successful submit's notional into the book mid-cycle.
+
+    Tier-2 #7 (2026-07-02): OPEN option positions' delta-adjusted notional is
+    folded into the seed under the UNDERLYING ticker.  Previously the options
+    sleeve only entered the book mid-cycle when ``express.py`` bought, so a
+    standing option position (e.g. a deep-ITM LEAPS call with ~$5.7k of
+    delta-notional) was INVISIBLE to the sector/gross/name caps when sizing
+    equity entries — a sector-cap bypass.  Shadow-mode option trades never
+    reach ``option_positions``, so only REAL exposure folds (consistent with
+    express.py's own live-fold rule).  The at-open delta snapshot is used —
+    the same exposure currency express.py folds with.
     """
     held: dict[str, float] = {}
     try:
@@ -215,7 +225,39 @@ def seed_risk_book(engine: "Engine", now: datetime) -> RiskBook:
         return RiskBook(held={}, sector_for=sector_for)
     for ticker, snap in positions.items():
         held[ticker] = position_market_value(engine, ticker, snap, now)
+
+    try:
+        from arbiter.options import positions as _opt_positions  # noqa: PLC0415
+
+        for pos in _opt_positions.list_open_positions(engine.conn):
+            dn = _option_delta_notional(pos)
+            if dn > 0.0:
+                und = str(pos["underlying"])
+                held[und] = held.get(und, 0.0) + dn
+    except Exception as exc:  # noqa: BLE001
+        # Fail-open to the equity-only book (the options fold is additive
+        # safety; a broken fold must not kill the cycle).
+        log.warning("engine.risk_book.options_fold_failed", error=str(exc))
+
     return RiskBook(held=held, sector_for=sector_for)
+
+
+def _option_delta_notional(pos: dict) -> float:
+    """Delta-adjusted notional USD of one open option position (at-open snapshot).
+
+    ``|delta| × 100 × contracts × underlying_open_price`` — the same exposure
+    currency ``express.py`` folds into the book on a live option buy.  Returns
+    0.0 for malformed rows (never raises; the fold is best-effort).
+    """
+    try:
+        return (
+            abs(float(pos["delta_at_open"]))
+            * 100.0
+            * float(pos["contracts_qty"])
+            * float(pos["underlying_open_price"])
+        )
+    except (KeyError, TypeError, ValueError):
+        return 0.0
 
 
 def run_divergence_reconcile(engine: "Engine", now: datetime) -> None:

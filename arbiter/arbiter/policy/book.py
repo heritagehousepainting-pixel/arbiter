@@ -93,12 +93,21 @@ class RiskBook:
         sector = self._sector_for(ticker)
         return self.sector_exposure().get(sector, 0.0)
 
+    def name_exposure_for(self, ticker: str) -> float:
+        """Notional USD already committed to ``ticker`` itself (0.0 if unheld).
+
+        Feeds ``decide(current_name_exposure=...)`` so an add-on to a held
+        name sizes against the per-name cap HEADROOM (Tier-2 #5).
+        """
+        return float(self._held.get(ticker, 0.0))
+
     def as_decide_kwargs(self, ticker: str) -> dict[str, object]:
         """Exact kwargs for ``decide()`` book-state params for ``ticker``."""
         return {
             "current_open_positions": self.open_positions(),
             "current_gross_exposure": self.gross_exposure(),
             "current_sector_exposure": self.sector_exposure_for(ticker),
+            "current_name_exposure": self.name_exposure_for(ticker),
         }
 
     # ------------------------------------------------------------------

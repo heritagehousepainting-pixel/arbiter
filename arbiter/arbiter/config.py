@@ -16,6 +16,7 @@ Downstream agents: the frozen ``Config`` dataclass fields are:
     max_gross_pct: float
     max_open_positions: int
     adv_cap_pct: float
+    allow_fractional: bool
     alpaca_api_key: str
     alpaca_secret_key: str
     alpaca_paper_base_url: str
@@ -95,6 +96,7 @@ _KNOWN_KEYS: dict[str, set[str]] = {
         "max_gross_pct",
         "max_open_positions",
         "adv_cap_pct",
+        "allow_fractional",
     },
     "storage": {"db_path", "audit_path", "metrics_path"},
     "alpaca": {
@@ -105,7 +107,7 @@ _KNOWN_KEYS: dict[str, set[str]] = {
         "timeout",
     },
     "edgar": {"user_agent"},
-    "finnhub": {"api_key", "min_stance", "min_confidence"},
+    "finnhub": {"api_key", "min_stance", "min_confidence", "catalyst_only"},
     "alerting": {"kill_switch_url", "alert_webhook_url"},
     "daemon": {"fast_interval_s", "full_cycle_times_et", "heartbeat_path"},
     "options": {
@@ -176,6 +178,15 @@ class Config:
     kill_switch_url: str
     alert_webhook_url: str
 
+    # Fractional-share fallback (Tier-2 #4, 2026-07-02): when the whole-share
+    # floor is 0 (stock price above the position notional), size the entry as a
+    # fractional qty instead of silently zero-share-skipping.  Alpaca supports
+    # fractional market/limit DAY orders in paper + live (docs:
+    # fractional-trading; verified 2026-07-02).  Kill switch:
+    # ARBITER_ALLOW_FRACTIONAL=0.  Defaulted so existing direct ``Config(...)``
+    # constructions (tests) need no change.
+    allow_fractional: bool = True
+
     # Daemon runtime (sub-project #3 — INTERFACES §10b.5).  Defaulted so existing
     # direct ``Config(...)`` constructions (tests) need no change.
     fast_interval_s: float = 180.0
@@ -219,6 +230,13 @@ class Config:
     # out-total it after fusion normalization).  Multiplier 1.0 disables.
     # Env vars: A3_WEIGHT_MULTIPLIER, A3_WEIGHT_CAP, A3_ADVISOR_ID.
     a3_weight_multiplier: float = 2.0
+
+    # Tier-3 #12 (2026-07-02) — catalyst-gated A3 sweep: the engine only
+    # gathers news for held tickers, fresh-signal tickers, and active-idea
+    # tickers (the full 138-name sweep took 30+ min/cycle under Finnhub's
+    # free tier and starved stop-checks).  False restores the full-watchlist
+    # sweep (news-only discovery).  Env var: A3_CATALYST_ONLY.
+    a3_catalyst_only: bool = True
     a3_weight_cap: float = 0.50
     a3_advisor_id: str = "A3.news"
 
@@ -471,6 +489,9 @@ def load_config(config_path: Path | None = None) -> Config:
         max_gross_pct=_env_float("ARBITER_MAX_GROSS_PCT", float(sizing.get("max_gross_pct", 0.80))),
         max_open_positions=_env_int("ARBITER_MAX_OPEN_POSITIONS", int(sizing.get("max_open_positions", 20))),
         adv_cap_pct=_env_float("ARBITER_ADV_CAP_PCT", float(sizing.get("adv_cap_pct", 0.02))),
+        allow_fractional=_env_bool(
+            "ARBITER_ALLOW_FRACTIONAL", bool(sizing.get("allow_fractional", True))
+        ),
         alpaca_api_key=_env_str("ALPACA_API_KEY", str(alpaca.get("api_key", ""))),
         alpaca_secret_key=_env_str("ALPACA_SECRET_KEY", str(alpaca.get("secret_key", ""))),
         alpaca_paper_base_url=alpaca_paper_base_url,
@@ -484,6 +505,7 @@ def load_config(config_path: Path | None = None) -> Config:
         a3_min_stance=_env_float("A3_MIN_STANCE", float(finnhub.get("min_stance", 0.25))),
         a3_min_confidence=_env_float("A3_MIN_CONFIDENCE", float(finnhub.get("min_confidence", 0.0))),
         a3_weight_multiplier=_env_float("A3_WEIGHT_MULTIPLIER", float(finnhub.get("weight_multiplier", 2.0))),
+        a3_catalyst_only=_env_bool("A3_CATALYST_ONLY", bool(finnhub.get("catalyst_only", True))),
         a3_weight_cap=_env_float("A3_WEIGHT_CAP", float(finnhub.get("weight_cap", 0.50))),
         a3_advisor_id=_env_str("A3_ADVISOR_ID", str(finnhub.get("advisor_id", "A3.news"))),
         anthropic_api_key=_env_str("ANTHROPIC_API_KEY", ""),
