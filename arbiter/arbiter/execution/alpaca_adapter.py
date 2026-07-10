@@ -20,6 +20,7 @@ Method names (INTERFACES.md §10b.2):
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -63,6 +64,79 @@ class BrokerError(Exception):
     def __init__(self, message: str, status_code: int | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+# ---------------------------------------------------------------------------
+# Rejection classification (2026-07-10 SPCX incident)
+# ---------------------------------------------------------------------------
+#
+# A broker non-200 on ORDER SUBMISSION is either:
+#   * SYMBOL-LEVEL — a per-order 4xx caused by an invalid/untradable/unknown
+#     asset (422 unprocessable, 404 asset-not-found, "asset ... not tradable").
+#     Skipping that ONE order and continuing the cycle is safe; halting all
+#     trading over it is not (one bad news-advisor ticker paused the engine).
+#   * SYSTEMIC — auth (401), account-level (403), rate-limit (429), 5xx,
+#     timeouts/connectivity.  Continuing is unsafe: keep the broker-fatal
+#     auto-pause.
+#
+# Fail-safe default: anything unrecognized classifies as SYSTEMIC.
+
+_SYMBOL_REJECTION_STATUSES: frozenset[int] = frozenset({404, 422})
+
+# A 422 caused by a DUPLICATE client_order_id (lost-response retry) is NOT a
+# symbol problem — the first POST likely succeeded at the broker, so skipping
+# would strand an untracked live order.  Force these back to broker-fatal so
+# the existing halt + reconcile posture applies.
+_SYSTEMIC_OVERRIDE_PATTERNS: tuple[str, ...] = (
+    "client_order_id",
+    "must be unique",
+    "duplicate",
+)
+
+# Reject-text fragments that mark a symbol-level rejection when no HTTP status
+# code survived the seam (e.g. a transport that raises without a .response).
+_SYMBOL_REJECTION_PATTERNS: tuple[str, ...] = (
+    "not tradable",
+    "not tradeable",
+    "asset not found",
+    "asset is not found",
+    "symbol not found",
+    "invalid symbol",
+    "asset is not active",
+    "could not find asset",
+)
+
+# Targeted HTTP-code extraction from a stringified error.  Deliberately narrow
+# so "Broker non-200" can never parse as code 200:
+#   [HTTP 422]   — stamped by place() into ExecutionReport.reject_reason;
+#   error '422   — httpx's HTTPStatusError message style;
+#   HTTP 503     — plain "HTTP <code>" phrasing (test fakes / transports).
+_HTTP_CODE_RE = re.compile(r"(?:\[http (\d{3})\]|error '(\d{3})|http[ /:](\d{3}))")
+
+
+def is_symbol_rejection(message: str, status_code: int | None = None) -> bool:
+    """True when a broker order rejection is a PER-ORDER symbol-level 4xx.
+
+    Callers treat True as non-fatal (skip the order, blacklist the ticker for
+    the session, continue the cycle) and False as broker-fatal (existing
+    auto-pause).  Classification order:
+
+    1. Systemic overrides (duplicate client_order_id wording) → False.
+    2. ``status_code`` — explicit, or parsed from *message* via the narrow
+       ``_HTTP_CODE_RE`` patterns — 404/422 → True, any other code → False.
+    3. No code at all: symbol-naming reject text ("not tradable", …) → True.
+    4. Anything else (timeouts, connectivity, unknown text) → False.
+    """
+    msg = (message or "").lower()
+    if any(p in msg for p in _SYSTEMIC_OVERRIDE_PATTERNS):
+        return False
+    if status_code is None:
+        match = _HTTP_CODE_RE.search(msg)
+        if match is not None:
+            status_code = int(next(g for g in match.groups() if g))
+    if status_code is not None:
+        return status_code in _SYMBOL_REJECTION_STATUSES
+    return any(p in msg for p in _SYMBOL_REJECTION_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
@@ -155,20 +229,43 @@ class AlpacaAdapter(Executor):
                         url=url,
                         error=str(exc),
                     )
-                else:
-                    log.error(
-                        "alpaca_adapter.halt",
-                        attempts=_MAX_RETRIES + 1,
-                        url=url,
-                        error=str(exc),
-                    )
 
-        raise BrokerError(
-            f"Broker non-200 after {_MAX_RETRIES + 1} attempts: {last_exc}",
-            status_code=getattr(last_exc, "response", None) and getattr(
-                last_exc.response, "status_code", None  # type: ignore[union-attr]
-            ),
-        )
+        # Recover the HTTP status + response body when the transport exposes
+        # them (httpx.HTTPStatusError carries .response).  The body is what
+        # names the actual failure ("asset SPCX is not tradable") — without it
+        # the halt log said nothing about WHY (2026-07-10 SPCX incident).
+        resp = getattr(last_exc, "response", None)
+        status_code = getattr(resp, "status_code", None) if resp is not None else None
+        body_text = ""
+        if resp is not None:
+            try:
+                body_text = str(getattr(resp, "text", "") or "")[:500]
+            except Exception:  # noqa: BLE001 — body recovery is best-effort
+                body_text = ""
+        detail = f"{last_exc}" + (f" | {body_text}" if body_text else "")
+        message = f"Broker non-200 after {_MAX_RETRIES + 1} attempts: {detail}"
+
+        # Log honestly: a symbol-level 4xx is handled NON-fatally upstream
+        # (submit_order skips the order; the engine blacklists the ticker), so
+        # only a genuinely systemic failure logs the ``halt`` event.
+        if is_symbol_rejection(message, status_code=status_code):
+            log.warning(
+                "alpaca_adapter.order_rejected",
+                attempts=_MAX_RETRIES + 1,
+                url=url,
+                status_code=status_code,
+                error=detail,
+            )
+        else:
+            log.error(
+                "alpaca_adapter.halt",
+                attempts=_MAX_RETRIES + 1,
+                url=url,
+                status_code=status_code,
+                error=detail,
+            )
+
+        raise BrokerError(message, status_code=status_code)
 
     # ------------------------------------------------------------------
     # Executor interface (INTERFACES.md §10b.2)
@@ -196,6 +293,12 @@ class AlpacaAdapter(Executor):
         try:
             data = self._post_with_retry(url, body)
         except BrokerError as exc:
+            # Stamp the HTTP status into the reject_reason so downstream
+            # classification (submit_order → is_symbol_rejection) survives the
+            # exception→report seam, where only this string is carried.
+            reject_reason = (
+                f"[HTTP {exc.status_code}] {exc}" if exc.status_code is not None else str(exc)
+            )
             return ExecutionReport(
                 order_id=intent.order_id,
                 ticker=intent.ticker,
@@ -205,7 +308,7 @@ class AlpacaAdapter(Executor):
                 avg_fill_price=None,
                 gross_notional=0.0,
                 realized_pl=None,
-                reject_reason=str(exc),
+                reject_reason=reject_reason,
                 executor=self.name,
                 paper_only=True,  # structurally paper-only: adapter only ever hits the paper endpoint (§2, §4.1)
             )

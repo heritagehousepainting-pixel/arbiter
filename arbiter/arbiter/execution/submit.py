@@ -47,6 +47,7 @@ log = structlog.get_logger(__name__)
 # Sentinel status strings (kept for back-compat with audit semantics).
 _SKIP_SENTINEL = "DUPLICATE_SKIP"
 _ZERO_SHARE_SKIP = "ZERO_SHARE_SKIP"
+_SYMBOL_REJECT_SKIP = "SYMBOL_REJECTED_SKIP"
 
 
 @dataclass(frozen=True)
@@ -61,12 +62,19 @@ class SubmitResult:
     status:
         One of the broker ``OrderStatus`` values ("filled", "pending",
         "partial", "rejected") for a placed order, or one of the sentinel
-        strings ``"DUPLICATE_SKIP"`` / ``"ZERO_SHARE_SKIP"`` when skipped.
+        strings ``"DUPLICATE_SKIP"`` / ``"ZERO_SHARE_SKIP"`` /
+        ``"SYMBOL_REJECTED_SKIP"`` when skipped.
     duplicate:
         True when the order was skipped as a duplicate (local ledger,
         broker position, or UNIQUE-constraint race).
     zero_share:
         True when the notional rounded to 0 shares and nothing was placed.
+    symbol_rejected:
+        True when the broker rejected THIS order at the SYMBOL level (4xx:
+        invalid/untradable/unknown asset — 2026-07-10 SPCX incident).  A
+        per-order failure, NOT broker-fatal: no BrokerError is raised, no
+        breaker is tripped, nothing is persisted.  The engine blacklists the
+        ticker in-memory for the session and the cycle continues.
     avg_fill_price:
         The broker ``ExecutionReport.avg_fill_price`` for a placed order (the
         REAL fill price), or ``None`` when nothing was placed or the broker did
@@ -86,6 +94,7 @@ class SubmitResult:
     status: str
     duplicate: bool = False
     zero_share: bool = False
+    symbol_rejected: bool = False
     avg_fill_price: float | None = None
     filled_notional: float | None = None
 
@@ -212,7 +221,10 @@ def submit_order(
     Raises
     ------
     BrokerError
-        If the broker rejects after 1 retry (bubbles from AlpacaAdapter).
+        If the broker rejects after 1 retry (bubbles from AlpacaAdapter) with
+        a SYSTEMIC failure (auth/account/5xx/timeout).  A SYMBOL-LEVEL 4xx
+        rejection (invalid/untradable asset) does NOT raise: it returns a
+        ``symbol_rejected=True`` SubmitResult instead (2026-07-10 SPCX).
     """
     as_of: datetime = clock.now()
     dh = dedup_hash(order)
@@ -352,11 +364,44 @@ def submit_order(
     #     would be silently skipped as a "duplicate".  So the not-persisted
     #     guarantee is UNCONDITIONAL on the breaker.
     #
-    #     The breaker latch is the only conditional part: if a breaker was
-    #     supplied, trip broker_non_200 to halt further submissions this cycle.
+    #     Rejections are classified (2026-07-10 SPCX incident):
+    #       * SYMBOL-LEVEL 4xx (422 unprocessable / 404 asset-not-found /
+    #         "asset not tradable") — a PER-ORDER failure: return a
+    #         ``symbol_rejected`` SubmitResult so the caller skips this order,
+    #         blacklists the ticker for the session, and CONTINUES the cycle.
+    #         No breaker trip (a latched breaker would gate the next cycle),
+    #         no BrokerError (which would auto-pause the whole engine).
+    #       * SYSTEMIC (401 auth / 403 account / 5xx / timeouts / anything
+    #         unrecognized) — broker-fatal, unchanged: trip broker_non_200 and
+    #         raise BrokerError to halt further submissions this cycle.
     #     SimExecutor never rejects, so this path is live-only in practice.
     # ------------------------------------------------------------------
     if report.status == "rejected":
+        from arbiter.execution.alpaca_adapter import (  # noqa: PLC0415
+            BrokerError,
+            is_symbol_rejection,
+        )
+        reject_reason = report.reject_reason or ""
+        if is_symbol_rejection(reject_reason):
+            log.warning(
+                "submit_order.symbol_rejected_skip",
+                order_id=order.order_id,
+                ticker=order.ticker,
+                reason=reject_reason,
+            )
+            _audit(
+                "order.symbol_rejected_skip",
+                {
+                    "order_id": order.order_id,
+                    "ticker": order.ticker,
+                    "reason": reject_reason,
+                },
+                ts=as_of.isoformat(),
+                audit_path=audit_path,
+            )
+            return SubmitResult(
+                order_id=None, status=_SYMBOL_REJECT_SKIP, symbol_rejected=True
+            )
         log.error(
             "submit_order.broker_rejected",
             order_id=order.order_id,
@@ -376,7 +421,6 @@ def submit_order(
             except BreakerTrippedError:
                 pass  # already latched; the raise below stops further submissions
         # Raise to abort cycle — do NOT persist the rejected order (breaker or not).
-        from arbiter.execution.alpaca_adapter import BrokerError  # noqa: PLC0415
         raise BrokerError(
             f"Broker rejected order {order.order_id} for {order.ticker}: {report.reject_reason}"
         )
