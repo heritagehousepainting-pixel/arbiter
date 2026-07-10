@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -275,6 +275,89 @@ def run_unexecuted_sweep(
         )
 
     return stored_ids
+
+
+def run_stuck_idea_sweep(
+    conn: sqlite3.Connection,
+    *,
+    clock: Clock,
+    max_age_hours: float,
+    audit_path: str | Path | None = None,
+) -> list[str]:
+    """Abandon pre-execution ideas stranded by a PRIOR cycle (2026-07-10 fix).
+
+    Normally an idea is created AND decided within one ``run_cycle``.  A cycle
+    that AUTO-PAUSES mid-run (broker-fatal on a bad symbol) strands its freshly
+    created ideas in GATHERING / PROVISIONAL_DECIDED.  Both are ACTIVE dedupe
+    states (``idea._ACTIVE_STATES``), so the orphans block their
+    ``(ticker, bucket)`` forever AND are never re-decided — a hard deadlock
+    (168 live GATHERING ideas as of the 2026-07-10 incident).
+
+    Any GATHERING / PROVISIONAL_DECIDED idea whose ``updated_state_at`` is
+    older than ``max_age_hours`` cannot be legitimately in flight in the
+    CURRENT cycle (a cycle completes in minutes); it is transitioned to
+    ABANDONED — a legal transition from any pre-EXECUTED state — freeing the
+    dedupe slot so the next cycle regenerates + decides the ticker fresh.
+    No outcome is labeled: these ideas were never decided, so there is no
+    falsifiable advisor call to score (unlike ``run_unexecuted_sweep``).
+
+    Guards:
+    - age is measured on the persisted ``updated_state_at`` (time in state),
+      NOT ``as_of`` — an idea built from days-old filing information is still
+      brand-new lifecycle-wise and must not be swept mid-flight.
+    - ``max_age_hours <= 0`` disables the sweep (fail-safe: a zero threshold
+      could abandon legitimately in-flight current-cycle ideas).
+    - every timestamp comes from the injected ``clock`` (never
+      ``datetime.now()``).
+
+    Returns the ids of the ideas abandoned this sweep.
+    """
+    if max_age_hours <= 0:
+        logger.warning(
+            "stuck_idea_sweep: non-positive max_age_hours=%s — sweep disabled "
+            "(a zero threshold could abandon in-flight current-cycle ideas)",
+            max_age_hours,
+        )
+        return []
+
+    now = clock.now()
+    cutoff = now - timedelta(hours=max_age_hours)
+
+    # Read updated_state_at straight off the rows: the reconstructed ``Idea``
+    # seam object carries only ``as_of`` (original information time), which is
+    # the wrong age basis here (see docstring guard).
+    rows = conn.execute(
+        "SELECT idea_id, ticker, state, updated_state_at FROM ideas "
+        "WHERE is_superseded = 0 AND state IN (?, ?)",
+        (IdeaState.GATHERING.value, IdeaState.PROVISIONAL_DECIDED.value),
+    ).fetchall()
+
+    abandoned: list[str] = []
+    for row in rows:
+        stamped = datetime.fromisoformat(row["updated_state_at"])
+        if stamped.tzinfo is None:  # same naive-row convention as _row_to_idea
+            stamped = stamped.replace(tzinfo=timezone.utc)
+        if stamped >= cutoff:
+            continue  # current-cycle idea, legitimately in flight
+
+        idea_store.update_idea_state(
+            conn,
+            row["idea_id"],
+            IdeaState.ABANDONED,
+            updated_state_at=now,
+            audit_path=audit_path,
+        )
+        abandoned.append(row["idea_id"])
+        logger.info(
+            "stuck_idea_sweep: abandoned stranded %s idea %s (%s) — stuck "
+            "since %s; dedupe slot freed for regeneration next cycle",
+            row["state"],
+            row["idea_id"],
+            row["ticker"],
+            row["updated_state_at"],
+        )
+
+    return abandoned
 
 
 def _has_sell_order(conn: sqlite3.Connection, idea: Idea) -> bool:

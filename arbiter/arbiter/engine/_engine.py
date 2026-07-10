@@ -169,6 +169,16 @@ class Engine:
     _learning_cache: "tuple | None" = field(default=None, repr=False)
 
     # ------------------------------------------------------------------
+    # Session-scoped (IN-MEMORY, never persisted) blacklist of tickers the
+    # broker rejected at the SYMBOL level (4xx: invalid/untradable asset —
+    # 2026-07-10 SPCX incident).  Populated by the submit path; consulted
+    # before every entry submit so a bad symbol is skipped, not retried,
+    # this session.  A daemon restart clears it (the symbol may have become
+    # tradable, or the advisor may have stopped emitting it).
+    # ------------------------------------------------------------------
+    _symbol_blacklist: set[str] = field(default_factory=set, init=False, repr=False)
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
@@ -766,6 +776,18 @@ class Engine:
         _broker_fatal: list[str] = []
 
         def _bound_submit(order: PaperOrder) -> bool:
+            # Session blacklist: a ticker the broker already rejected at the
+            # SYMBOL level (invalid/untradable — 2026-07-10 SPCX) is never
+            # re-submitted this session; skip before any broker call.
+            if order.ticker in self._symbol_blacklist:
+                log.info(
+                    "engine.run_cycle.blacklisted_symbol_skip",
+                    ticker=order.ticker,
+                    order_id=order.order_id,
+                    as_of=now.isoformat(),
+                )
+                return False
+
             # Fetch real entry price — fail-closed if unavailable.
             price_val = self.pit.get("price_open", order.ticker, now)
             if price_val is None:
@@ -797,6 +819,9 @@ class Engine:
 
             # Critical condition (c): broker-fatal error → fire alert + re-raise so
             # cycle.py's BrokerError name-check can halt remaining submissions.
+            # NOTE: a SYMBOL-LEVEL 4xx rejection (invalid/untradable asset) does
+            # NOT raise — submit_order returns ``symbol_rejected=True`` and the
+            # skip+blacklist branch below keeps the cycle running (2026-07-10).
             from arbiter.execution.alpaca_adapter import BrokerError  # noqa: PLC0415
             try:
                 sub_result = submit_order(
@@ -819,6 +844,20 @@ class Engine:
                     as_of=now,
                 )
                 raise  # re-raise so orchestrator cycle.py can break its submission loop
+
+            # Symbol-level broker rejection (4xx: invalid/untradable asset):
+            # skip THIS order only, blacklist the ticker for the session so it
+            # is not retried, and CONTINUE the cycle — per-order, not
+            # broker-fatal (2026-07-10 SPCX incident).
+            if sub_result.symbol_rejected:
+                self._symbol_blacklist.add(order.ticker)
+                log.warning(
+                    "engine.run_cycle.symbol_rejected_blacklisted",
+                    ticker=order.ticker,
+                    order_id=order.order_id,
+                    as_of=now.isoformat(),
+                )
+                return False
 
             # B5: link the persisted order row to its owning idea by idea_id.
             # We match the live idea for (ticker, bucket) — at submit time it is
@@ -1041,6 +1080,31 @@ class Engine:
             )
         except Exception as exc:  # noqa: BLE001
             log.error("engine.run_cycle.unexecuted_sweep_failed", error=str(exc))
+
+        # 2026-07-10 deadlock fix — abandon GATHERING / PROVISIONAL_DECIDED
+        # ideas stranded by a PRIOR cycle (a mid-cycle broker-fatal auto-pause
+        # landed before decide).  Stranded orphans are ACTIVE for dedupe, so
+        # they block their (ticker, bucket) forever and are never re-decided;
+        # abandoning them frees the slot so the next cycle regenerates +
+        # decides the ticker fresh.  The age threshold guarantees a
+        # legitimately in-flight current-cycle idea is never swept.
+        try:
+            swept_stuck = outcome_runner.run_stuck_idea_sweep(
+                self.conn,
+                clock=self.clock,
+                max_age_hours=getattr(
+                    self.config, "stuck_idea_max_age_hours", 2.0
+                ),
+                audit_path=self.config.audit_path,
+            )
+            if swept_stuck:
+                log.info(
+                    "engine.run_cycle.stuck_ideas_abandoned",
+                    count=len(swept_stuck),
+                    as_of=now.isoformat(),
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.error("engine.run_cycle.stuck_idea_sweep_failed", error=str(exc))
 
         log.info(
             "engine.run_cycle.done",

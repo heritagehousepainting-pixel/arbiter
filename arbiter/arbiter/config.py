@@ -207,6 +207,17 @@ class Config:
     # Defaulted so existing direct ``Config(...)`` constructions need no change.
     dedupe_cooldown_days: int = 3
 
+    # Stuck pre-execution sweep (2026-07-10 deadlock fix): a GATHERING or
+    # PROVISIONAL_DECIDED idea stranded by a PRIOR cycle (a mid-cycle broker-fatal
+    # auto-pause landed before decide) blocks its (ticker,bucket) dedupe slot
+    # forever and is never re-decided.  Ideas older than this many hours in those
+    # states are ABANDONED by the end-of-cycle sweep so the next cycle regenerates
+    # + decides them fresh.  Must comfortably exceed one cycle's duration so a
+    # legitimately in-flight current-cycle idea can never be swept; <= 0 disables
+    # the sweep (fail-safe).  Env var: ARBITER_STUCK_IDEA_MAX_AGE_HOURS.
+    # Defaulted so existing direct ``Config(...)`` constructions need no change.
+    stuck_idea_max_age_hours: float = 2.0
+
     # A3 News advisor (Finnhub) — free API key (non-commercial personal use).
     # Register at https://finnhub.io (instant, no card).  Empty = A3 inert.
     # Env var: FINNHUB_API_KEY.
@@ -499,6 +510,7 @@ def load_config(config_path: Path | None = None) -> Config:
             "ARBITER_ALLOW_FRACTIONAL", bool(sizing.get("allow_fractional", True))
         ),
         dedupe_cooldown_days=_env_int("ARBITER_DEDUPE_COOLDOWN_DAYS", 3),
+        stuck_idea_max_age_hours=_env_float("ARBITER_STUCK_IDEA_MAX_AGE_HOURS", 2.0),
         alpaca_api_key=_env_str("ALPACA_API_KEY", str(alpaca.get("api_key", ""))),
         alpaca_secret_key=_env_str("ALPACA_SECRET_KEY", str(alpaca.get("secret_key", ""))),
         alpaca_paper_base_url=alpaca_paper_base_url,
