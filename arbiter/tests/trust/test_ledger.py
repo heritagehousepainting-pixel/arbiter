@@ -353,16 +353,26 @@ class TestMiroFishCap:
 
 class TestNegativeSkillAdvisor:
     def test_negative_skill_advisor_weight_zero_and_shadow(self):
-        """An advisor with negative BSS gets weight=0.0 and shadow=True."""
-        # Patch brier_skill_score in the ledger module's namespace (where it was imported)
+        """A SIGNIFICANTLY-negative advisor (skill CI upper bound < 0, well-sampled)
+        gets weight=0.0 and shadow=True.
+
+        Demotion is significance-gated (2026-07-10): it keys off the bootstrap
+        skill CI + effective-n, NOT a bare point estimate.  Patch those to
+        simulate a genuinely, significantly-negative advisor.
+        """
         import arbiter.trust.ledger as ledger_mod
 
-        original_bss = ledger_mod.brier_skill_score
+        original_ci = ledger_mod.bootstrap_skill_ci
+        original_neff = ledger_mod.effective_sample_size
 
-        def fake_bss(outcomes, dates, as_of):
-            return -0.15  # negative skill
+        def fake_ci(outcomes, dates, as_of):
+            return (-0.30, -0.10)  # entire CI below zero -> significantly negative
 
-        ledger_mod.brier_skill_score = fake_bss
+        def fake_neff(outcomes, dates, as_of):
+            return MIN_EFFECTIVE_N  # well-sampled enough for significance
+
+        ledger_mod.bootstrap_skill_ci = fake_ci
+        ledger_mod.effective_sample_size = fake_neff
         try:
             n = PHASE3_ACTIVATION_THRESHOLD
             outcomes_by_advisor = {
@@ -381,7 +391,8 @@ class TestNegativeSkillAdvisor:
             assert aw.weight == 0.0
             assert aw.shadow is True
         finally:
-            ledger_mod.brier_skill_score = original_bss
+            ledger_mod.bootstrap_skill_ci = original_ci
+            ledger_mod.effective_sample_size = original_neff
 
 
 class TestRealNegativeSkillEndToEnd:
@@ -836,3 +847,16 @@ class TestEmptyEligibleRosterWarning:
         assert not any("empty_roster" in msg for msg in warning_messages), (
             f"Unexpected empty_roster warning when roster was provided: {warning_messages}"
         )
+
+
+def test_is_significant_negative_skill():
+    """Demotion gate is symmetric with graduation: mute only on significant, well-sampled negative skill."""
+    from arbiter.trust.ledger import is_significant_negative_skill, MIN_EFFECTIVE_N
+    # Significantly negative AND well-sampled -> mute.
+    assert is_significant_negative_skill(-0.10, MIN_EFFECTIVE_N) is True
+    # CI upper bound reaches/exceeds 0 (straddles zero) -> do NOT mute (thin/insignificant blip).
+    assert is_significant_negative_skill(0.05, MIN_EFFECTIVE_N * 2) is False
+    # ci_high < 0 but effective-n too small -> do NOT mute.
+    assert is_significant_negative_skill(-0.10, MIN_EFFECTIVE_N - 1) is False
+    # None CI -> do NOT mute.
+    assert is_significant_negative_skill(None, MIN_EFFECTIVE_N) is False

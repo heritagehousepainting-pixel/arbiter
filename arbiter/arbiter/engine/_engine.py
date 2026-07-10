@@ -969,6 +969,7 @@ class Engine:
             submit=_bound_submit,
             clock=self.clock,
             active_ideas=active_ideas,
+            dedupe_cooldown_days=self.config.dedupe_cooldown_days,
             on_new_idea=_on_new_idea,
             on_transition=_on_transition,
             express=_bound_express if _options_on else None,

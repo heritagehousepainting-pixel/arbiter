@@ -108,6 +108,7 @@ def run_cycle(
     on_new_idea: Callable[[Idea], None] | None = None,
     on_transition: Callable[[Idea, IdeaState], None] | None = None,
     express: ExpressCallable | None = None,
+    dedupe_cooldown_days: int = 3,
 ) -> CycleResult:
     """Run one full decision cycle.
 
@@ -188,7 +189,7 @@ def run_cycle(
     # ------------------------------------------------------------------
     pending_ideas: list[Idea] = []
     for idea in ideas:
-        if is_duplicate(idea, all_active):
+        if is_duplicate(idea, all_active, now=now, cooldown_days=dedupe_cooldown_days):
             logger.info(
                 "Skipping duplicate idea %s (%s, %s) — active idea already exists",
                 idea.idea_id,
