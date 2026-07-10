@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -97,6 +97,29 @@ def _http_403(url: str = "https://data.example/v2/stocks/trades/latest") -> http
     return httpx.HTTPStatusError("403 Forbidden", request=request, response=response)
 
 
+def _http_429(url: str = "https://data.example/v2/stocks/trades/latest") -> httpx.HTTPStatusError:
+    """A transient rate-limit failure, built offline (no network)."""
+    request = httpx.Request("GET", url)
+    response = httpx.Response(429, request=request)
+    return httpx.HTTPStatusError("429 Too Many Requests", request=request, response=response)
+
+
+class _Flaky429ThenOk:
+    """Raises 429 on the FIRST call, then serves trades — exercises the retry."""
+
+    def __init__(self, trades: dict[str, float]):
+        self.trades = trades
+        self.calls = 0
+
+    def __call__(self, url: str, headers: dict):
+        self.calls += 1
+        if self.calls == 1:
+            raise _http_429()
+        if "/trades/latest" in url:
+            return {"trades": {s: {"p": p} for s, p in self.trades.items()}}
+        return {"quotes": {}}
+
+
 class TestNullProvider:
     def test_returns_none(self):
         p = NullCurrentPriceProvider()
@@ -149,7 +172,7 @@ class TestAlpacaCurrentPriceSource:
 class TestFeedFallbackAndOutageAlert:
     """2026-07-10 incident hardening: sip-403 → iex fallback; outage → alert."""
 
-    def _src(self, http_get, *, feed: str, monkeypatch: pytest.MonkeyPatch):
+    def _src(self, http_get, *, feed: str, monkeypatch: pytest.MonkeyPatch, sleep=None):
         monkeypatch.setenv("ALPACA_DATA_FEED", feed)
         recorder = _AlertRecorder()
         src = AlpacaCurrentPriceSource(
@@ -157,6 +180,7 @@ class TestFeedFallbackAndOutageAlert:
             http_get=http_get,
             alerting=recorder,
             clock=BacktestClock(_AS_OF),
+            sleep=sleep if sleep is not None else (lambda _s: None),
         )
         return src, recorder
 
@@ -220,21 +244,48 @@ class TestFeedFallbackAndOutageAlert:
         assert tier == "critical"
         assert ctx["fallback_attempted"] is False
 
-    def test_outage_alert_latched_once_per_episode_and_rearmed(self, monkeypatch):
-        """A persistent outage pages ONCE; a healthy read re-arms the latch."""
+    def test_outage_alert_latched_once_per_cooldown(self, monkeypatch):
+        """A burst / persistent outage pages ONCE within the cooldown (not per
+        symbol); after the cooldown elapses a still-broken feed pages again."""
         fake = _FeedFakeHTTP({"iex": _http_403()})
         src, recorder = self._src(fake, feed="iex", monkeypatch=monkeypatch)
 
+        # Burst: several per-symbol outage reads in one sweep → ONE page.
         src.current_prices(["AAPL"])
-        src.current_prices(["AAPL"])  # still broken → suppressed by the latch
+        src.current_prices(["MSFT"])
+        src.current_prices(["TSLA"])
         assert len(recorder.calls) == 1
 
-        fake.behavior["iex"] = {"AAPL": 101.0}  # feed recovers
+        # A healthy read no longer re-arms — that was the per-symbol double-page bug.
+        fake.behavior["iex"] = {"AAPL": 101.0}
         assert src.current_prices(["AAPL"]) == {"AAPL": 101.0}
+        fake.behavior["iex"] = _http_403()
+        src.current_prices(["AAPL"])  # still within cooldown → suppressed
+        assert len(recorder.calls) == 1
 
-        fake.behavior["iex"] = _http_403()  # breaks AGAIN → new episode pages
+        # Advance past the cooldown → a persistent outage re-pages.
+        src._clock.advance(timedelta(seconds=src._outage_alert_cooldown_s + 1))
         src.current_prices(["AAPL"])
         assert len(recorder.calls) == 2
+
+    def test_rate_limit_429_is_transient_no_alert(self, monkeypatch):
+        """A 429 is transient: retried once, and if still 429 it is NOT escalated
+        to a feed-outage page (empty result → monitor fails closed to daily PIT)."""
+        fake = _FeedFakeHTTP({"iex": _http_429()})
+        sleeps: list = []
+        src, recorder = self._src(
+            fake, feed="iex", monkeypatch=monkeypatch, sleep=sleeps.append
+        )
+        assert src.current_prices(["AAPL"]) == {}
+        assert recorder.calls == []      # no critical page for a transient 429
+        assert sleeps                    # a backoff/retry was attempted
+
+    def test_rate_limit_429_then_success_returns_price(self, monkeypatch):
+        """429 on the first attempt, success on the retry → price flows, no alert."""
+        fake = _Flaky429ThenOk({"AAPL": 100.0})
+        src, recorder = self._src(fake, feed="iex", monkeypatch=monkeypatch)
+        assert src.current_prices(["AAPL"]) == {"AAPL": 100.0}
+        assert recorder.calls == []
 
 
 class TestPITPurityGuard:
