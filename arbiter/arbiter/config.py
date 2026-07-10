@@ -201,6 +201,12 @@ class Config:
     # existing direct ``Config(...)`` constructions need no change.
     trust_equal_floor: float = 0.25
 
+    # Dedupe cooldown (2026-07-10 unfreeze): a never-executed FINAL_DECIDED idea
+    # blocks its (ticker,bucket) for only this many days, then frees the slot so
+    # the ticker can be reconsidered (outcome labeling still runs at full horizon).
+    # Defaulted so existing direct ``Config(...)`` constructions need no change.
+    dedupe_cooldown_days: int = 3
+
     # A3 News advisor (Finnhub) — free API key (non-commercial personal use).
     # Register at https://finnhub.io (instant, no card).  Empty = A3 inert.
     # Env var: FINNHUB_API_KEY.
@@ -492,6 +498,7 @@ def load_config(config_path: Path | None = None) -> Config:
         allow_fractional=_env_bool(
             "ARBITER_ALLOW_FRACTIONAL", bool(sizing.get("allow_fractional", True))
         ),
+        dedupe_cooldown_days=_env_int("ARBITER_DEDUPE_COOLDOWN_DAYS", 3),
         alpaca_api_key=_env_str("ALPACA_API_KEY", str(alpaca.get("api_key", ""))),
         alpaca_secret_key=_env_str("ALPACA_SECRET_KEY", str(alpaca.get("secret_key", ""))),
         alpaca_paper_base_url=alpaca_paper_base_url,

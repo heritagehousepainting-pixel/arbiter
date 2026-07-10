@@ -9,7 +9,7 @@ idea is in a pre-EXECUTED active state.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from arbiter.contract.seams import Idea
 from arbiter.db.helpers import generate_ulid
@@ -101,12 +101,24 @@ def make_idea(
     )
 
 
-def is_duplicate(idea: Idea, active_ideas: list[Idea]) -> bool:
+def is_duplicate(
+    idea: Idea,
+    active_ideas: list[Idea],
+    *,
+    now: datetime | None = None,
+    cooldown_days: int | None = None,
+) -> bool:
     """Return True if *idea* is a duplicate of any active idea.
 
     A duplicate means the same ``(ticker, horizon_bucket.value)`` key exists
     in an active pre-EXECUTED state.  Different horizon buckets on the same
     ticker are NOT duplicates.
+
+    When both ``now`` and ``cooldown_days`` are provided, a never-executed
+    ``FINAL_DECIDED`` idea (a prior no-trade decision) only blocks while younger
+    than the cooldown; past it, it no longer blocks — it stays FINAL_DECIDED so
+    the outcome sweep still labels it at full horizon (2026-07-10 unfreeze).
+    Omitting them preserves the legacy always-block behavior.
 
     Parameters
     ----------
@@ -114,16 +126,29 @@ def is_duplicate(idea: Idea, active_ideas: list[Idea]) -> bool:
         The candidate idea to check.
     active_ideas:
         All currently active ideas to search.
+    now:
+        Current (Lane-3 clock) time, for the FINAL_DECIDED cooldown.  Optional.
+    cooldown_days:
+        Days a never-executed FINAL_DECIDED idea keeps blocking.  Optional.
 
     Returns
     -------
     bool
     """
+    apply_cooldown = now is not None and cooldown_days is not None
+    cooldown = timedelta(days=cooldown_days) if apply_cooldown else None
     for existing in active_ideas:
         if (
-            existing.idea_id != idea.idea_id
-            and existing.dedupe_key == idea.dedupe_key
-            and existing.state in _ACTIVE_STATES
+            existing.idea_id == idea.idea_id
+            or existing.dedupe_key != idea.dedupe_key
+            or existing.state not in _ACTIVE_STATES
         ):
-            return True
+            continue
+        if (
+            apply_cooldown
+            and existing.state is IdeaState.FINAL_DECIDED
+            and now - existing.as_of > cooldown
+        ):
+            continue  # stale no-trade idea: cooldown elapsed → no longer blocks
+        return True
     return False

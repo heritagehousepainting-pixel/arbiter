@@ -164,11 +164,12 @@ def test_T5_negative_skill_suppressed_cold_sibling_trades(monkeypatch):
 
     NOTE: the ResolvedOutcome encoding ties the reconstructed forecast direction to
     the outcome direction (``p_hat = stance_to_prob(binary * confidence)``), so a
-    NEGATIVE BSS is structurally unreachable from synthetic outcome rows alone (the
-    ledger's own test acknowledges this and exercises the cap via ``_apply_caps``).
-    We therefore force ``brier_skill_score`` negative for the insider so the LEDGER
-    genuinely emits ``cap_reason="negative_skill"`` and we can prove the engine
-    suppresses it end-to-end.
+    NEGATIVE skill CI is structurally unreachable from synthetic outcome rows alone.
+    Demotion is significance-gated (2026-07-10) on the bootstrap skill CI, so we
+    force ``bootstrap_skill_ci`` significantly-negative for the insider (its 60 real
+    outcomes supply the effective-n) so the LEDGER genuinely emits
+    ``cap_reason="negative_skill"`` and we can prove the engine suppresses it
+    end-to-end.
     """
     import arbiter.trust.ledger as ledger_mod
 
@@ -182,13 +183,20 @@ def test_T5_negative_skill_suppressed_cold_sibling_trades(monkeypatch):
     # congress: cold (no outcomes) → floored
 
     _real_bss = ledger_mod.brier_skill_score
+    _real_ci = ledger_mod.bootstrap_skill_ci
 
     def _bss(outcomes, dates, as_of):
         if outcomes and outcomes[0].advisor_id == INSIDER:
             return -0.5  # sub-chance → negative skill
         return _real_bss(outcomes, dates, as_of)
 
+    def _ci(outcomes, dates, as_of):
+        if outcomes and outcomes[0].advisor_id == INSIDER:
+            return (-0.6, -0.3)  # entire skill CI below zero → significantly negative
+        return _real_ci(outcomes, dates, as_of)
+
     monkeypatch.setattr(ledger_mod, "brier_skill_score", _bss)
+    monkeypatch.setattr(ledger_mod, "bootstrap_skill_ci", _ci)
 
     eng = _engine(conn, T, equal_floor=0.3)
     wb, cal = eng._build_learning_inputs(T)

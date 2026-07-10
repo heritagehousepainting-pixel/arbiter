@@ -189,3 +189,38 @@ class TestIsDuplicate:
 
         new_medium = self._make("AAPL", 90)  # MEDIUM bucket
         assert is_duplicate(new_medium, active) is True  # duplicate of medium_idea
+
+
+class TestDedupeCooldown:
+    """2026-07-10 unfreeze: a never-executed FINAL_DECIDED idea stops blocking its
+    (ticker,bucket) after a short cooldown; other active states are unaffected."""
+
+    @staticmethod
+    def _idea(idea_id, state, as_of):
+        from arbiter.contract.seams import Idea
+        return Idea(
+            idea_id=idea_id,
+            ticker="NVDA",
+            thesis="t",
+            horizon_days=180,
+            state=state,
+            as_of=as_of,
+            dedupe_key=dedupe_key_for("NVDA", HorizonBucket.LONG),
+        )
+
+    def test_final_decided_past_cooldown_does_not_block(self):
+        from datetime import timedelta
+        now = datetime(2026, 7, 10, tzinfo=_UTC)
+        candidate = self._idea("new", IdeaState.NASCENT, now)
+        stale = self._idea("old", IdeaState.FINAL_DECIDED, now - timedelta(days=5))
+        fresh = self._idea("recent", IdeaState.FINAL_DECIDED, now - timedelta(days=1))
+        in_flight = self._idea("gathering", IdeaState.GATHERING, now - timedelta(days=30))
+
+        # Stale never-executed FINAL_DECIDED past 3d cooldown -> no longer blocks.
+        assert is_duplicate(candidate, [stale], now=now, cooldown_days=3) is False
+        # Fresh FINAL_DECIDED within cooldown -> still blocks (avoid churn).
+        assert is_duplicate(candidate, [fresh], now=now, cooldown_days=3) is True
+        # In-flight GATHERING idea -> always blocks regardless of age.
+        assert is_duplicate(candidate, [in_flight], now=now, cooldown_days=3) is True
+        # Legacy call (no cooldown args) -> stale FINAL_DECIDED still blocks (back-compat).
+        assert is_duplicate(candidate, [stale]) is True

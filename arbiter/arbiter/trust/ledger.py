@@ -358,6 +358,28 @@ def is_significant_skill(
     return ci_low > 0.0 and n_eff >= min_effective_n
 
 
+def is_significant_negative_skill(
+    ci_high: float | None,
+    n_eff: float,
+    *,
+    min_effective_n: float = MIN_EFFECTIVE_N,
+) -> bool:
+    """Demotion significance gate: skill is real AND significantly NEGATIVE.
+
+    Symmetric mirror of ``is_significant_skill``.  True only when BOTH hold:
+      (a) the bootstrap CI UPPER bound on skill is below zero (ci_high < 0),
+          i.e. the advisor is distinguishably WORSE than chance, and
+      (b) effective (decay-weighted) sample size exceeds ``min_effective_n``.
+
+    A thin/NULL advisor (CI straddles 0, or n_eff too low) fails and is floored
+    rather than muted — it keeps trading and keeps accruing outcomes to learn
+    from.  Prevents benching an advisor on a statistically-insignificant blip.
+    """
+    if ci_high is None:
+        return False
+    return ci_high < 0.0 and n_eff >= min_effective_n
+
+
 # ---------------------------------------------------------------------------
 # Shadow onboarding ramp
 # ---------------------------------------------------------------------------
@@ -530,11 +552,19 @@ class TrustLedger:
             eligible = eligible_by_advisor.get(advisor_id, [])
             cal = calibration_by_advisor.get(advisor_id, 1.0)
 
-            bss = brier_skill_score(outcomes, dates, as_of)
-            is_negative_skill = bss is not None and bss < 0.0
-            # D1/D6: record WHY a weight ends up suppressed so trust_store can
-            # persist it and the resolver can distinguish negative-skill (mute)
-            # from onboarding/cold (floor to keep trading).
+            # Statistical power: bootstrap CI on SKILL + effective-n, computed
+            # once and shared by BOTH the demotion gate (below) and the
+            # graduation gate (further down).
+            skill_ci = bootstrap_skill_ci(outcomes, dates, as_of)
+            n_eff = effective_sample_size(outcomes, dates, as_of)
+            skill_ci_low = skill_ci[0] if skill_ci is not None else None
+            skill_ci_high = skill_ci[1] if skill_ci is not None else None
+
+            # D1/D6: record WHY a weight ends up suppressed.  Demotion is now
+            # significance-gated (symmetric with graduation): mute ONLY when the
+            # skill CI upper bound is below zero AND effective-n is sufficient,
+            # never on a thin/insignificant negative point estimate.
+            is_negative_skill = is_significant_negative_skill(skill_ci_high, n_eff)
             cap_reasons[advisor_id] = "negative_skill" if is_negative_skill else None
 
             composite = compute_composite_trust(
@@ -559,11 +589,6 @@ class TrustLedger:
                 continue
 
             n_non_abstain = sum(1 for o in outcomes if not o.abstained)
-
-            # --- Statistical power: real bootstrap CI on SKILL + effective-n ---
-            skill_ci = bootstrap_skill_ci(outcomes, dates, as_of)
-            n_eff = effective_sample_size(outcomes, dates, as_of)
-            skill_ci_low = skill_ci[0] if skill_ci is not None else None
 
             # Significance/effective-n gate: an advisor graduates out of shadow
             # ONLY when the skill CI clears zero AND effective-n is sufficient —
