@@ -243,6 +243,28 @@ export interface OptionsState {
   as_of: string;
 }
 
+// --- Robotics watchlist (mirror of RoboticsRosterEntry/RoboticsWatchlist in contract.py) ------
+export type RoboticsLayer = "compute" | "brain" | "components" | "integrator" | "deployment";
+export type RoboticsLongevity = "chokepoint" | "durable" | "commodity" | "hype-risk" | "unclear";
+
+export interface RoboticsRosterEntry {
+  symbol: string;
+  company: string;
+  layer: RoboticsLayer;
+  longevity: RoboticsLongevity;
+  priceable: boolean;
+  form_factors: string[];
+  early_insight: boolean;
+  trigger: string | null;
+  region: string | null;
+  note: string | null;
+}
+
+export interface RoboticsWatchlist {
+  generated: string;
+  entries: RoboticsRosterEntry[];
+}
+
 // Cluster → accent color (lane 5 may refine into proper design tokens).
 export const CLUSTER_COLOR: Record<Cluster, string> = {
   sources: "#5b8cff",

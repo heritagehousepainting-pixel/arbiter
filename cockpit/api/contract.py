@@ -296,3 +296,28 @@ class ChartSeries(BaseModel):
     extended_available: bool = False    # True when pre/post-market bars are present
     as_of: str
     alpaca_ok: bool = False
+
+
+# --- Robotics watchlist (display-only; see docs/specs/2026-07-13-robotics-watchlist-design.md) --
+RoboticsLayer = Literal["compute", "brain", "components", "integrator", "deployment"]
+RoboticsLongevity = Literal["chokepoint", "durable", "commodity", "hype-risk", "unclear"]
+
+
+class RoboticsRosterEntry(BaseModel):
+    """One curated robotics-universe row. DISPLAY-ONLY — never trade-eligible."""
+    symbol: str                              # display ticker (home-exchange for reference rows)
+    company: str
+    layer: RoboticsLayer
+    longevity: RoboticsLongevity
+    priceable: bool                          # True → live price via /ticker; False → reference row
+    form_factors: list[str] = []
+    early_insight: bool = False              # ⭐ from robotics_map.json earlyInsightCandidates
+    trigger: str | None = None               # "trigger to watch" text for early-insight rows
+    region: str | None = None
+    note: str | None = None
+
+
+class RoboticsWatchlist(BaseModel):
+    """The full curated roster, served at GET /robotics-watchlist (static, read-only)."""
+    generated: str
+    entries: list[RoboticsRosterEntry] = []
