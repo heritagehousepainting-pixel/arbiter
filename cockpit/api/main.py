@@ -12,13 +12,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .chart import build_chart_series
-from .contract import ChartSeries, Graph, Health, IVSeries, NodeDetail, OptionsState, PositionsResponse, State, TickerDetail
+from .contract import ChartSeries, Graph, Health, IVSeries, NodeDetail, OptionsState, PositionsResponse, RoboticsWatchlist, State, TickerDetail
 from .db import connect, db_reachable
 from .events import event_stream
 from .graph import build_graph
 from .node_detail import build_node_detail
 from .options import build_iv_series, build_options_state
 from .positions import build_positions
+from .robotics_roster import GENERATED as ROBOTICS_GENERATED, robotics_roster
 from .ticker import build_ticker_detail
 from .state import _heartbeat, build_state
 
@@ -111,3 +112,9 @@ def chart(symbol: str, range: str = Query(default="live")) -> ChartSeries:
     """OHLCV chart data for one ticker (read-only, from Alpaca). Never raises."""
     range_val = range if range in {"live", "5d", "1m", "3m", "6m"} else "live"
     return build_chart_series(symbol.strip().upper(), range_val)
+
+
+@app.get("/robotics-watchlist", response_model=RoboticsWatchlist)
+def robotics_watchlist() -> RoboticsWatchlist:
+    """Curated display-only robotics universe (static; never touches the DB or arbiter)."""
+    return RoboticsWatchlist(generated=ROBOTICS_GENERATED, entries=robotics_roster())

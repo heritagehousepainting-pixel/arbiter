@@ -152,3 +152,25 @@ class TestRosterPurity:
                     assert not a.name.startswith("arbiter"), f"imports {a.name}"
             if isinstance(node, ast.ImportFrom):
                 assert not (node.module or "").startswith("arbiter"), f"imports from {node.module}"
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — GET /robotics-watchlist route
+# ---------------------------------------------------------------------------
+class TestRoboticsRoute:
+    def test_returns_200_and_shape(self, client):
+        r = client.get("/robotics-watchlist")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["generated"]
+        assert isinstance(data["entries"], list) and len(data["entries"]) >= 25
+        e = data["entries"][0]
+        for field in ("symbol", "company", "layer", "longevity", "priceable",
+                      "form_factors", "early_insight", "trigger", "region", "note"):
+            assert field in e, f"missing {field}"
+
+    def test_is_static_no_db(self, client):
+        """Endpoint must not depend on the DB — patch connect to explode; still 200."""
+        with patch("cockpit.api.main.connect", side_effect=AssertionError("DB touched")):
+            r = client.get("/robotics-watchlist")
+        assert r.status_code == 200
