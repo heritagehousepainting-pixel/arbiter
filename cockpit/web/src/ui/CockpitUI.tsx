@@ -23,6 +23,7 @@ import { theme } from "../theme/theme";
 import { OptionsPanel } from "./OptionsPanel";
 import { PositionsPanel } from "./PositionsPanel";
 import { useCockpitStore } from "./store";
+import { RoboticsPanel } from "./RoboticsPanel";
 import { WatchlistBar } from "./WatchlistBar";
 import { WatchlistChartBox } from "./WatchlistChartBox";
 
@@ -1482,6 +1483,8 @@ export function CockpitUI({
       {/* Watchlist: search bar + chart panel */}
       <WatchlistBar inspectionOpen={!!effectiveSelectedId} />
       <WatchlistChartBox />
+      {/* Robotics: display-only layer-grouped board (reuses the chart box) */}
+      <RoboticsPanel inspectionOpen={!!effectiveSelectedId} />
     </>
   );
 }
