@@ -13,8 +13,13 @@
  * chart symbol auto-collapses to the icon.
  */
 import { useEffect, useRef, useState } from "react";
-import { fetchRoboticsWatchlist } from "../api";
-import type { RoboticsLayer, RoboticsLongevity, RoboticsRosterEntry } from "../contract";
+import { fetchRoboticsSignals, fetchRoboticsWatchlist } from "../api";
+import type {
+  RoboticsLayer,
+  RoboticsLongevity,
+  RoboticsRosterEntry,
+  RoboticsSignal,
+} from "../contract";
 import { motion, prefersReducedMotion } from "../theme/theme";
 import { useWatchlistStore } from "./watchlistStore";
 
@@ -134,6 +139,7 @@ export function RoboticsPanel({ inspectionOpen }: RoboticsPanelProps) {
 
   const [open, setOpen] = useState(false);
   const [entries, setEntries] = useState<RoboticsRosterEntry[] | null>(null);
+  const [signals, setSignals] = useState<RoboticsSignal[] | null>(null);
   const [error, setError] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -141,13 +147,16 @@ export function RoboticsPanel({ inspectionOpen }: RoboticsPanelProps) {
   useEffect(() => { if (inspectionOpen) setOpen(false); }, [inspectionOpen]);
   useEffect(() => { if (activeWatchSymbol) setOpen(false); }, [activeWatchSymbol]);
 
-  // Lazy-load the roster once, on first expand
+  // Lazy-load the roster + recent signals once, on first expand
   useEffect(() => {
     if (!open || entries !== null) return;
     let cancelled = false;
     fetchRoboticsWatchlist()
       .then((wl) => { if (!cancelled) setEntries(wl.entries); })
       .catch(() => { if (!cancelled) { setEntries([]); setError(true); } });
+    fetchRoboticsSignals()
+      .then((s) => { if (!cancelled) setSignals(s.signals); })
+      .catch(() => { if (!cancelled) setSignals([]); });
     return () => { cancelled = true; };
   }, [open, entries]);
 
@@ -215,6 +224,24 @@ export function RoboticsPanel({ inspectionOpen }: RoboticsPanelProps) {
 
           {/* Body */}
           <div style={{ overflowY: "auto", padding: "4px 12px 10px" }}>
+            {signals && signals.length > 0 && (
+              <div data-testid="robotics-signals" style={{ marginTop: 8, marginBottom: 4 }}>
+                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.4, color: "#ffd166", marginBottom: 2 }}>
+                  RECENT SIGNALS
+                </div>
+                {signals.slice(0, 6).map((s, i) => (
+                  <div
+                    key={i}
+                    data-testid="robotics-signal"
+                    style={{ fontSize: 11, color: T.text, padding: "2px 0", borderBottom: "1px solid rgba(28,34,51,0.5)" }}
+                  >
+                    {s.trigger_hit && <span style={{ color: "#ffd166" }}>★ </span>}
+                    <span>{s.headline}</span>
+                    {s.trigger_name && <span style={{ color: T.muted }}> ({s.trigger_name})</span>}
+                  </div>
+                ))}
+              </div>
+            )}
             {entries === null ? (
               <div style={{ color: T.muted, fontStyle: "italic", fontSize: 11, padding: "10px 0" }}>Loading…</div>
             ) : error ? (

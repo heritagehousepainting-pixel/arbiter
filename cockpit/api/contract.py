@@ -321,3 +321,21 @@ class RoboticsWatchlist(BaseModel):
     """The full curated roster, served at GET /robotics-watchlist (static, read-only)."""
     generated: str
     entries: list[RoboticsRosterEntry] = []
+
+
+class RoboticsSignal(BaseModel):
+    """One persisted robotics-signal development (read-only, from robotics_signals)."""
+    as_of: str
+    headline: str
+    summary: str = ""
+    category: str = "other"
+    symbols: list[str] = []
+    trigger_hit: bool = False
+    trigger_name: str | None = None
+    sources: list[str] = []
+
+
+class RoboticsSignals(BaseModel):
+    """Recent robotics signals, served at GET /robotics-signals (read-only)."""
+    signals: list[RoboticsSignal] = []
+    as_of: str

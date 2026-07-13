@@ -194,3 +194,38 @@ class TestRoboticsRoute:
         with patch("cockpit.api.main.connect", side_effect=AssertionError("DB touched")):
             r = client.get("/robotics-watchlist")
         assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# 3c — GET /robotics-signals (reads the robotics_signals table, read-only)
+# ---------------------------------------------------------------------------
+class TestRoboticsSignals:
+    def test_empty_when_no_rows(self, client):
+        r = client.get("/robotics-signals")
+        assert r.status_code == 200
+        assert r.json()["signals"] == []
+
+    def test_returns_seeded_rows_trigger_hits_first(self, client, fixture_db):
+        import sqlite3
+        conn = sqlite3.connect(fixture_db)
+        conn.executemany(
+            "INSERT INTO robotics_signals "
+            "(as_of, headline, summary, category, symbols, trigger_hit, trigger_name, sources) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                ("2026-07-13T08:00:00Z", "Nvidia ships Thor", "s", "compute",
+                 "NVDA", 0, None, "https://x/nvda"),
+                ("2026-07-13T08:00:00Z", "Bosch to Neura production order", "s",
+                 "integrator", "NEURA", 1, "NEURA", "https://x/neura"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+        r = client.get("/robotics-signals")
+        assert r.status_code == 200
+        signals = r.json()["signals"]
+        assert len(signals) == 2
+        # trigger-hits sort ahead within a timestamp
+        assert signals[0]["trigger_hit"] is True
+        assert signals[0]["trigger_name"] == "NEURA"
+        assert signals[0]["symbols"] == ["NEURA"]

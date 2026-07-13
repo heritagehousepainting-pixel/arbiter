@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .chart import build_chart_series
-from .contract import ChartSeries, Graph, Health, IVSeries, NodeDetail, OptionsState, PositionsResponse, RoboticsWatchlist, State, TickerDetail
+from .contract import ChartSeries, Graph, Health, IVSeries, NodeDetail, OptionsState, PositionsResponse, RoboticsSignals, RoboticsWatchlist, State, TickerDetail
 from .db import connect, db_reachable
 from .events import event_stream
 from .graph import build_graph
@@ -20,6 +20,7 @@ from .node_detail import build_node_detail
 from .options import build_iv_series, build_options_state
 from .positions import build_positions
 from .robotics_roster import GENERATED as ROBOTICS_GENERATED, robotics_roster
+from .robotics_signals import build_robotics_signals
 from .ticker import build_ticker_detail
 from .state import _heartbeat, build_state
 
@@ -118,3 +119,13 @@ def chart(symbol: str, range: str = Query(default="live")) -> ChartSeries:
 def robotics_watchlist() -> RoboticsWatchlist:
     """Curated display-only robotics universe (static; never touches the DB or arbiter)."""
     return RoboticsWatchlist(generated=ROBOTICS_GENERATED, entries=robotics_roster())
+
+
+@app.get("/robotics-signals", response_model=RoboticsSignals)
+def robotics_signals() -> RoboticsSignals:
+    """Recent robotics signals (read-only; empty until the first scan runs)."""
+    conn = connect()
+    try:
+        return build_robotics_signals(conn)
+    finally:
+        conn.close()

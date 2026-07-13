@@ -265,6 +265,22 @@ export interface RoboticsWatchlist {
   entries: RoboticsRosterEntry[];
 }
 
+export interface RoboticsSignal {
+  as_of: string;
+  headline: string;
+  summary: string;
+  category: string;
+  symbols: string[];
+  trigger_hit: boolean;
+  trigger_name: string | null;
+  sources: string[];
+}
+
+export interface RoboticsSignals {
+  signals: RoboticsSignal[];
+  as_of: string;
+}
+
 // Cluster → accent color (lane 5 may refine into proper design tokens).
 export const CLUSTER_COLOR: Record<Cluster, string> = {
   sources: "#5b8cff",

@@ -8,6 +8,7 @@ import type {
   NodeDetail,
   OptionsState,
   PositionsResponse,
+  RoboticsSignals,
   RoboticsWatchlist,
   State,
   TickerDetail,
@@ -32,6 +33,7 @@ export const fetchTickerDetail = (symbol: string) =>
 export const fetchChart = (symbol: string, range: ChartRange) =>
   get<ChartSeries>(`/chart/${encodeURIComponent(symbol)}?range=${range}`);
 export const fetchRoboticsWatchlist = () => get<RoboticsWatchlist>("/robotics-watchlist");
+export const fetchRoboticsSignals = () => get<RoboticsSignals>("/robotics-signals");
 
 /** Subscribe to the live SSE event stream (Lane 2 implements /events). */
 export function subscribeEvents(onEvent: (e: CockpitEvent) => void): () => void {

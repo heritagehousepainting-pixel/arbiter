@@ -12,10 +12,11 @@ import { useWatchlistStore } from "../watchlistStore";
 
 vi.mock("../../api", () => ({
   fetchRoboticsWatchlist: vi.fn(),
+  fetchRoboticsSignals: vi.fn(),
   fetchTickerDetail: vi.fn(),
   fetchChart: vi.fn(),
 }));
-import { fetchRoboticsWatchlist } from "../../api";
+import { fetchRoboticsSignals, fetchRoboticsWatchlist } from "../../api";
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -35,6 +36,11 @@ beforeEach(() => {
   root = createRoot(container);
   useWatchlistStore.setState({ activeWatchSymbol: null });
   vi.mocked(fetchRoboticsWatchlist).mockReset();
+  vi.mocked(fetchRoboticsSignals).mockReset();
+  // default: empty signals feed (individual tests override)
+  vi.mocked(fetchRoboticsSignals).mockResolvedValue({
+    signals: [], as_of: "2026-07-13T00:00:00Z",
+  } as never);
 });
 
 afterEach(async () => {
@@ -127,5 +133,41 @@ describe("RoboticsPanel", () => {
     await render(<RoboticsPanel inspectionOpen={true} />);
     expect(container.querySelector("[data-testid='robotics-panel-expanded']")).toBeNull();
     expect(container.querySelector("[data-testid='robotics-icon-btn']")).not.toBeNull();
+  });
+
+  it("renders the recent-signals feed with trigger-hit markers", async () => {
+    vi.mocked(fetchRoboticsWatchlist).mockResolvedValue(ROSTER as never);
+    vi.mocked(fetchRoboticsSignals).mockResolvedValue({
+      signals: [
+        { as_of: "2026-07-13T08:00:00Z", headline: "Bosch → Neura production order",
+          summary: "s", category: "integrator", symbols: ["NEURA"],
+          trigger_hit: true, trigger_name: "NEURA", sources: [] },
+        { as_of: "2026-07-13T08:00:00Z", headline: "Nvidia ships Thor", summary: "s",
+          category: "compute", symbols: ["NVDA"], trigger_hit: false,
+          trigger_name: null, sources: [] },
+      ],
+      as_of: "2026-07-13T08:00:00Z",
+    } as never);
+    await render(<RoboticsPanel inspectionOpen={false} />);
+    await React.act(async () => {
+      (container.querySelector("[data-testid='robotics-icon-btn']") as HTMLButtonElement).click();
+    });
+    await flush();
+    const feed = container.querySelector("[data-testid='robotics-signals']");
+    expect(feed).not.toBeNull();
+    expect(feed?.textContent).toContain("RECENT SIGNALS");
+    expect(feed?.textContent).toContain("Bosch → Neura production order");
+    expect(feed?.textContent).toContain("★"); // trigger-hit marker
+    expect(container.querySelectorAll("[data-testid='robotics-signal']").length).toBe(2);
+  });
+
+  it("shows no feed when there are no signals", async () => {
+    vi.mocked(fetchRoboticsWatchlist).mockResolvedValue(ROSTER as never);
+    await render(<RoboticsPanel inspectionOpen={false} />);
+    await React.act(async () => {
+      (container.querySelector("[data-testid='robotics-icon-btn']") as HTMLButtonElement).click();
+    });
+    await flush();
+    expect(container.querySelector("[data-testid='robotics-signals']")).toBeNull();
   });
 });
