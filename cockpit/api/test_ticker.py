@@ -143,6 +143,38 @@ class TestPositionsParser:
         assert len(result.positions) == 1
         assert result.positions[0].day_change_pct == pytest.approx(0.0099, abs=1e-6)
 
+    def test_option_positions_excluded_from_equity_list(self):
+        """us_option positions belong in the OPTIONS panel, NOT the equity Open
+        Positions list. Alpaca /v2/positions returns both asset classes; this
+        equity-only endpoint must filter options out (list AND aggregates)."""
+        with patch("arbiter.config.load_config") as mock_cfg_fn, \
+             patch("arbiter.engine.build_executor") as mock_ex_fn:
+            mock_ex = MagicMock()
+            mock_ex.http_get.return_value = [
+                {"symbol": "AMZN", "asset_class": "us_equity", "qty": "1",
+                 "avg_entry_price": "239.9", "current_price": "240.0",
+                 "market_value": "240.0", "cost_basis": "239.9",
+                 "unrealized_pl": "0.1", "unrealized_plpc": "0.0004"},
+                {"symbol": "PFE270319C00023000", "asset_class": "us_option",
+                 "qty": "1", "avg_entry_price": "2.43", "current_price": "2.31",
+                 "market_value": "231.0", "cost_basis": "243.0",
+                 "unrealized_pl": "-12.0", "unrealized_plpc": "-0.0494"},
+            ]
+            mock_ex._base.return_value = "https://paper-api.alpaca.markets"
+            mock_ex._headers.return_value = {}
+            mock_ex.get_account.return_value = MagicMock(equity=10000.0, daily_pl=5.0)
+            mock_ex_fn.return_value = mock_ex
+            mock_cfg_fn.return_value = MagicMock()
+
+            from cockpit.api.positions import build_positions
+            result = build_positions()
+
+        tickers = [p.ticker for p in result.positions]
+        assert tickers == ["AMZN"], f"option leaked into equity list: {tickers}"
+        assert result.portfolio.n_open == 1
+        # the option's -12.0 upl must not bleed into the equity aggregate
+        assert result.portfolio.total_unrealized_pl == pytest.approx(0.1, abs=1e-6)
+
     def test_change_today_absent_gives_none(self):
         """change_today missing from raw payload → day_change_pct = None."""
         with patch("arbiter.config.load_config") as mock_cfg_fn, \

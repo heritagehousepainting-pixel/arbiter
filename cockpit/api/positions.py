@@ -50,6 +50,12 @@ def build_positions() -> PositionsResponse:
         ticker = p.get("symbol", "")
         if not ticker:
             continue
+        # Equity Open Positions only.  Alpaca /v2/positions returns BOTH asset
+        # classes; option contracts are the options sleeve and are surfaced in the
+        # OPTIONS panel (cockpit/api/options.py, from the option_positions ledger).
+        # Skip them here so they don't leak into the equity list or its aggregates.
+        if p.get("asset_class") == "us_option":
+            continue
         qty_signed = _f(p.get("qty"), 0.0) or 0.0
         side = "short" if qty_signed < 0 else "long"
         avg_entry = _f(p.get("avg_entry_price"), 0.0) or 0.0
