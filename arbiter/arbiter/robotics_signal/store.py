@@ -9,7 +9,7 @@ belt-and-suspenders programmatic form used in tests (same pattern as
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from arbiter.robotics_signal.types import RoboticsDevelopment
 
@@ -62,16 +62,40 @@ def read_recent_signals(conn: sqlite3.Connection, *, limit: int = 30) -> list[di
         "ORDER BY as_of DESC, trigger_hit DESC, id DESC LIMIT ?",
         (int(limit),),
     ).fetchall()
-    out: list[dict] = []
-    for as_of, headline, summary, category, symbols, trigger_hit, trigger_name, sources in rows:
-        out.append({
-            "as_of": as_of,
-            "headline": headline,
-            "summary": summary,
-            "category": category,
-            "symbols": [s for s in (symbols or "").split(",") if s],
-            "trigger_hit": bool(trigger_hit),
-            "trigger_name": trigger_name,
-            "sources": [s for s in (sources or "").split(",") if s],
-        })
-    return out
+    return [_row_to_dict(r) for r in rows]
+
+
+def read_active_trigger_hits(conn: sqlite3.Connection, as_of: datetime,
+                             *, window_days: int = 7) -> list[dict]:
+    """Trigger-hits inside a recency window, most-recent first.
+
+    Feeds the probationary A5.robotics advisor (#3d).  Mirrors
+    ``findings_store.read_active_findings``: SQL-level filtering so a stale
+    signal can never keep nudging the engine.  Only rows with ``trigger_hit=1``
+    whose ``as_of`` is within ``window_days`` of ``as_of`` are returned.
+    Timestamps are UTC ISO strings, so the ``>=`` string comparison sorts
+    chronologically.
+    """
+    cutoff = (as_of - timedelta(days=window_days)).isoformat()
+    rows = conn.execute(
+        "SELECT as_of, headline, summary, category, symbols, trigger_hit, "
+        "trigger_name, sources FROM robotics_signals "
+        "WHERE trigger_hit = 1 AND as_of >= ? "
+        "ORDER BY as_of DESC, id DESC",
+        (cutoff,),
+    ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def _row_to_dict(row: tuple) -> dict:
+    as_of, headline, summary, category, symbols, trigger_hit, trigger_name, sources = row
+    return {
+        "as_of": as_of,
+        "headline": headline,
+        "summary": summary,
+        "category": category,
+        "symbols": [s for s in (symbols or "").split(",") if s],
+        "trigger_hit": bool(trigger_hit),
+        "trigger_name": trigger_name,
+        "sources": [s for s in (sources or "").split(",") if s],
+    }
