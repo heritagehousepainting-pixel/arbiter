@@ -70,6 +70,7 @@ class DaemonState:
     last_ingest_date: Any = None        # date of the last ingest
     fired_full_slots: set = field(default_factory=set)  # (date, (h, m)) already run
     last_monday_refresh_date: Any = None  # ET date of the last macro scan (Tier-3 #11)
+    last_robotics_scan_date: Any = None  # ET date of the last robotics scan (#3)
     last_session_open: bool | None = None  # for open→closed transition detection
     backoff_s: float = 0.0
     consecutive_recoveries: int = 0     # auto-recoveries since the last clean iteration
@@ -311,6 +312,9 @@ def run_daemon(
             # Tier-3 #11: Monday pre-market macro scan (was never scheduled).
             _maybe_monday_refresh(engine, now, state)
 
+            # #3: twice-weekly (Mon+Thu) robotics early-insight scan.
+            _maybe_robotics_scan(engine, now, state)
+
             if session.is_open:
                 # FULL cycle at configured ET slots (ingest + entries + reversal).
                 for slot in _due_full_slots(now, full_times, state):
@@ -393,6 +397,41 @@ def _maybe_monday_refresh(engine: Any, now: datetime, state: DaemonState) -> Non
             engine.alerting.alert(
                 "warning",
                 f"Monday macro refresh failed in daemon: {exc}",
+                ctx={"as_of": now.isoformat()},
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _maybe_robotics_scan(engine: Any, now: datetime, state: DaemonState) -> None:
+    """Run the twice-weekly robotics early-insight scan from the daemon (#3).
+
+    Fires on Mondays and Thursdays in the 08:00–09:30 ET pre-market window,
+    once per ET date (in-memory dedup, set FIRST so a failing LLM scan can't
+    tight-loop).  Fail-safe: any error is logged + alerted, never crashes the
+    loop.  Phone (+ later cockpit) delivery only — the probationary advisor
+    (``robotics_advisor_enabled``, default off) is a separate later wiring.
+    """
+    et = _et_now(now)
+    if et.weekday() not in (0, 3):  # Monday + Thursday
+        return
+    if not (8 * 60 <= et.hour * 60 + et.minute < 9 * 60 + 30):
+        return
+    if state.last_robotics_scan_date == et.date():
+        return
+    state.last_robotics_scan_date = et.date()  # set FIRST — never tight-loop an LLM scan
+    try:
+        from arbiter.robotics_signal.orchestrator import run_robotics_scan  # noqa: PLC0415
+
+        log.info("daemon.robotics_scan.start", as_of=now.isoformat())
+        run_robotics_scan(engine)
+        log.info("daemon.robotics_scan.done", as_of=now.isoformat())
+    except Exception as exc:  # noqa: BLE001
+        log.error("daemon.robotics_scan.failed", error=str(exc))
+        try:
+            engine.alerting.alert(
+                "warning",
+                f"Robotics signal scan failed in daemon: {exc}",
                 ctx={"as_of": now.isoformat()},
             )
         except Exception:  # noqa: BLE001

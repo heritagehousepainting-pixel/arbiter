@@ -193,6 +193,20 @@ def monday_refresh() -> None:
     typer.echo(f"  re-ingested       : {', '.join(report.reingested) or 'none'}")
 
 
+@app.command("robotics-scan")
+def robotics_scan() -> None:
+    """Run the robotics early-insight scan (web search → phone digest)."""
+    from arbiter.engine import build_engine  # noqa: PLC0415
+    from arbiter.robotics_signal.orchestrator import run_robotics_scan  # noqa: PLC0415
+
+    engine = build_engine()
+    report = run_robotics_scan(engine)
+    typer.echo("Robotics scan complete.")
+    typer.echo(f"  available    : {report.scan.available}")
+    typer.echo(f"  developments : {len(report.scan.developments)}")
+    typer.echo(f"  trigger hits : {len(report.scan.trigger_hits)}")
+
+
 @app.command("backtest")
 def backtest(
     start: str = typer.Option(..., "--start", help="Start date YYYY-MM-DD"),

@@ -268,6 +268,11 @@ class Config:
     a4_weight_cap: float = 0.50
     a4_advisor_id: str = "A4.macro"
 
+    # --- Robotics early-insight signal (#3) ----------------------------
+    # Model for the twice-weekly robotics web-search scan; empty falls back to
+    # ``refresh_model``.  Env var: ROBOTICS_MODEL.
+    robotics_model: str = ""
+
     # A1.fund (Form 13F) advisor — quarterly fund-manager holdings signals.
     # Env var: FORM13F_MIN_POSITION_USD
     form13f_min_position_usd: float = 10_000_000.0
@@ -534,6 +539,7 @@ def load_config(config_path: Path | None = None) -> Config:
         a4_weight_multiplier=_env_float("A4_WEIGHT_MULTIPLIER", 2.0),
         a4_weight_cap=_env_float("A4_WEIGHT_CAP", 0.50),
         a4_advisor_id=_env_str("A4_ADVISOR_ID", "A4.macro"),
+        robotics_model=_env_str("ROBOTICS_MODEL", ""),
         kill_switch_url=_env_str("KILL_SWITCH_URL", str(alerting.get("kill_switch_url", ""))),
         alert_webhook_url=_env_str("ALERT_WEBHOOK_URL", str(alerting.get("alert_webhook_url", ""))),
         fast_interval_s=_env_float("ARBITER_FAST_INTERVAL_S", float(daemon.get("fast_interval_s", 180.0))),
