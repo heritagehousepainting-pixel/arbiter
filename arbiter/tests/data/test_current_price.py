@@ -104,6 +104,13 @@ def _http_429(url: str = "https://data.example/v2/stocks/trades/latest") -> http
     return httpx.HTTPStatusError("429 Too Many Requests", request=request, response=response)
 
 
+def _http_400(url: str = "https://data.example/v2/stocks/trades/latest") -> httpx.HTTPStatusError:
+    """A hard client error (invalid symbol in a batch) — built offline."""
+    request = httpx.Request("GET", url)
+    response = httpx.Response(400, request=request)
+    return httpx.HTTPStatusError("400 Bad Request", request=request, response=response)
+
+
 class _Flaky429ThenOk:
     """Raises 429 on the FIRST call, then serves trades — exercises the retry."""
 
@@ -167,6 +174,30 @@ class TestAlpacaCurrentPriceSource:
         # Alerting (audit-file write) inside the test.
         src = AlpacaCurrentPriceSource(_cfg(), http_get=boom, alerting=_AlertRecorder())
         assert src.current_prices(["AAPL"]) == {}
+
+    def test_option_occ_symbol_excluded_from_stock_batch(self):
+        """An OCC option symbol must NEVER be sent to the Alpaca STOCKS endpoint:
+        Alpaca 400s the WHOLE batch, blinding every equity and firing a false
+        feed-outage page every cycle.  Options are filtered out so equities still
+        price and no alert fires.  Regression: a held PFE270319C00023000 paged a
+        critical 'stop-losses BLIND' every ~5 minutes."""
+        option = "PFE270319C00023000"
+
+        def http(url, headers):
+            syms = url.split("symbols=", 1)[1].split("&", 1)[0].split(",")
+            if option in syms:
+                raise _http_400(url)  # Alpaca rejects the entire mixed batch
+            if "/trades/latest" in url:
+                return {"trades": {"AMZN": {"p": 240.0}}}
+            return {"quotes": {}}
+
+        recorder = _AlertRecorder()
+        src = AlpacaCurrentPriceSource(_cfg(), http_get=http, alerting=recorder)
+
+        prices = src.current_prices(["AMZN", option])
+
+        assert prices == {"AMZN": 240.0}, "equity must still price despite a held option"
+        assert recorder.calls == [], "an option symbol must not trigger a feed-outage page"
 
 
 class TestFeedFallbackAndOutageAlert:

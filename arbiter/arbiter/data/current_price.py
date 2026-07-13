@@ -45,6 +45,7 @@ were SILENTLY blind, with only a ``log.warning`` as evidence.  Two durable fixes
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Any, Iterable, Protocol, runtime_checkable
 
@@ -58,6 +59,20 @@ log = structlog.get_logger(__name__)
 # The free-plan-safe feed every Alpaca account is entitled to.  Used as the
 # automatic retry target when the configured feed errors out.
 _FALLBACK_FEED = "iex"
+
+# OCC option symbols (e.g. "PFE270319C00023000" = root + YYMMDD + C/P + 8-digit
+# strike) are NOT valid on the Alpaca ``/v2/stocks/*`` endpoints.  A SINGLE option
+# symbol in a batch makes Alpaca 400 the WHOLE request — zeroing every equity price
+# and firing a false 'stop-losses BLIND' outage page every cycle.  Options are
+# priced via the options data feed, never here, so they are filtered out of stock
+# reads.  The pattern (root + 6-digit date + C/P + 8-digit strike) never matches a
+# plain stock ticker.
+_OPTION_SYMBOL_RE = re.compile(r"^[A-Z]{1,6}\d{6}[CP]\d{8}$")
+
+
+def _is_option_symbol(sym: str) -> bool:
+    """True iff ``sym`` is an OCC option symbol (never a plain stock ticker)."""
+    return bool(_OPTION_SYMBOL_RE.match(sym))
 
 
 @runtime_checkable
@@ -175,7 +190,10 @@ class AlpacaCurrentPriceSource:
         (HTTP 200, no recent trades — the normal closed-market shape) never
         alerts.
         """
-        symbols = sorted({t for t in tickers if t})
+        # Filter OCC option symbols: they 400 the Alpaca stocks endpoint and
+        # poison the whole batch (blinding every equity + firing a false outage).
+        # Options price via the options data feed, not this stock reader.
+        symbols = sorted({t for t in tickers if t and not _is_option_symbol(t)})
         if not symbols:
             return {}
 
