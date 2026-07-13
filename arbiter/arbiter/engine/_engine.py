@@ -404,6 +404,21 @@ class Engine:
             log.warning("engine.a4.gather_failed", error=str(exc))
             return []
 
+    def _gather_a5_opinions(self) -> list[Opinion]:
+        """Gather A5.robotics opinions from persisted trigger-hits (fail-closed).
+
+        The adapter self-gates: it returns ``[]`` when the ``robotics_advisor_enabled``
+        kill-switch is OFF (the shipped default) and under a ``BacktestClock`` (no
+        look-ahead), and never raises.  We still wrap it so any unexpected failure
+        can never abort the trading cycle.
+        """
+        try:
+            from arbiter.adapters.a5 import gather_a5_opinions  # noqa: PLC0415
+            return gather_a5_opinions(self.conn, self.clock, self.config)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("engine.a5.gather_failed", error=str(exc))
+            return []
+
     def run_cycle(self, as_of: datetime | None = None) -> CycleResult:
         """Run one full decision cycle.
 
@@ -586,7 +601,11 @@ class Engine:
         else:
             a3_opinions = self._gather_a3_opinions()
         a4_opinions = self._gather_a4_opinions()
-        if not signals and not a3_opinions and not a4_opinions:
+        # A5 (robotics) — probationary trigger-hit nudges.  Self-gating in
+        # adapters.a5: [] when the robotics_advisor_enabled kill-switch is OFF
+        # (default) and under a BacktestClock; never raises.
+        a5_opinions = self._gather_a5_opinions()
+        if not signals and not a3_opinions and not a4_opinions and not a5_opinions:
             log.info("engine.run_cycle.no_signals", as_of=now.isoformat())
             return CycleResult(ideas_processed=0)
 
@@ -655,6 +674,22 @@ class Engine:
                 ideas.append(make_idea(
                     ticker=op.ticker,
                     thesis=f"macro on {op.ticker}",
+                    horizon_days=op.horizon_days,
+                    as_of=now,
+                ))
+            valid_opinions.append(op)
+            live_advisor_count += 1
+
+        for op in a5_opinions:
+            if op.ticker in held_tickers and not _addon_ok(op.ticker):
+                # Skip robotics nudges on held tickers without add-on headroom;
+                # A5 otherwise spawns short-horizon ideas like any advisor.
+                continue
+            if op.ticker not in seen_tickers:
+                seen_tickers.add(op.ticker)
+                ideas.append(make_idea(
+                    ticker=op.ticker,
+                    thesis=f"robotics on {op.ticker}",
                     horizon_days=op.horizon_days,
                     as_of=now,
                 ))
