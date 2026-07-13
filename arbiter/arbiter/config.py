@@ -273,6 +273,22 @@ class Config:
     # ``refresh_model``.  Env var: ROBOTICS_MODEL.
     robotics_model: str = ""
 
+    # --- Robotics probationary advisor A5.robotics (#3d) ---------------
+    # KILL-SWITCH — DEFAULT OFF.  The A5.robotics advisor turns twice-weekly
+    # robotics trigger-hits into probationary Opinions that can NUDGE the live
+    # engine.  It is dormant until the creator explicitly flips this after
+    # watching the signal; even when ON it is live-only (returns [] under
+    # BacktestClock), significance-gated, and weight-capped.  Env var:
+    # ROBOTICS_ADVISOR_ENABLED.  Mirrors the A4.macro knobs.
+    robotics_advisor_enabled: bool = False
+    a5_min_stance: float = 0.25
+    a5_min_confidence: float = 0.0
+    # Small probationary cap: the emitted opinion's confidence is bounded by this
+    # so an unproven robotics nudge can never speak as loudly as a graduated
+    # advisor.  Env var: A5_WEIGHT_CAP.
+    a5_weight_cap: float = 0.25
+    a5_advisor_id: str = "A5.robotics"
+
     # A1.fund (Form 13F) advisor — quarterly fund-manager holdings signals.
     # Env var: FORM13F_MIN_POSITION_USD
     form13f_min_position_usd: float = 10_000_000.0
@@ -540,6 +556,11 @@ def load_config(config_path: Path | None = None) -> Config:
         a4_weight_cap=_env_float("A4_WEIGHT_CAP", 0.50),
         a4_advisor_id=_env_str("A4_ADVISOR_ID", "A4.macro"),
         robotics_model=_env_str("ROBOTICS_MODEL", ""),
+        robotics_advisor_enabled=_env_bool("ROBOTICS_ADVISOR_ENABLED", False),
+        a5_min_stance=_env_float("A5_MIN_STANCE", 0.25),
+        a5_min_confidence=_env_float("A5_MIN_CONFIDENCE", 0.0),
+        a5_weight_cap=_env_float("A5_WEIGHT_CAP", 0.25),
+        a5_advisor_id=_env_str("A5_ADVISOR_ID", "A5.robotics"),
         kill_switch_url=_env_str("KILL_SWITCH_URL", str(alerting.get("kill_switch_url", ""))),
         alert_webhook_url=_env_str("ALERT_WEBHOOK_URL", str(alerting.get("alert_webhook_url", ""))),
         fast_interval_s=_env_float("ARBITER_FAST_INTERVAL_S", float(daemon.get("fast_interval_s", 180.0))),
