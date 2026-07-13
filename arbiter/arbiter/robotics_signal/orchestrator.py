@@ -7,6 +7,7 @@ import structlog
 
 from arbiter.robotics_signal.digest import push_digest
 from arbiter.robotics_signal.scan import scan_robotics
+from arbiter.robotics_signal.store import persist_signals
 from arbiter.robotics_signal.types import RoboticsReport, RoboticsScanResult
 
 log = structlog.get_logger(__name__)
@@ -36,6 +37,13 @@ def run_robotics_scan(engine: Any, *, llm: Any = None, alerting: Any = None) -> 
         RoboticsScanResult(available=False, note="unavailable"),
     )
     report = RoboticsReport(as_of=as_of, scan=scan)
+
+    # Persist for the cockpit feed (#3c) and, later, the A5.robotics advisor
+    # (#3d). Only when there's a writable connection; fail-safe.
+    conn = getattr(engine, "conn", None)
+    if conn is not None and scan.available and scan.developments:
+        _safe("persist", lambda: persist_signals(conn, scan.developments, as_of), 0)
+
     alert = alerting if alerting is not None else getattr(engine, "alerting", None)
     if alert is not None:
         _safe("push", lambda: push_digest(report, alerting=alert), None)
