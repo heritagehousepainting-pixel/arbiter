@@ -141,17 +141,37 @@ class TestRosterData:
 
 
 class TestRosterPurity:
-    def test_module_imports_nothing_from_arbiter(self):
-        """The display-only invariant: roster code cannot reach the trading system."""
+    """The display-only invariant, refined: the roster now PROJECTS the canonical
+    ``arbiter.data.robotics_universe`` (pure data), so it may import exactly that one
+    module and NOTHING that reaches a trade-eligibility seam (sectors / ingest / engine /
+    _DEFAULT_WATCHLIST). Being importable never makes a symbol trade-eligible."""
+
+    _ALLOWED_ARBITER = {"arbiter.data.robotics_universe"}
+    _FORBIDDEN_SUBSTRINGS = ("sectors", "ingest", "engine", "runner", "_DEFAULT_WATCHLIST")
+
+    @staticmethod
+    def _arbiter_imports(path: Path) -> list[str]:
         import ast
-        src = Path(__file__).resolve().parent / "robotics_roster.py"
-        tree = ast.parse(src.read_text())
+        names: list[str] = []
+        tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                for a in node.names:
-                    assert not a.name.startswith("arbiter"), f"imports {a.name}"
-            if isinstance(node, ast.ImportFrom):
-                assert not (node.module or "").startswith("arbiter"), f"imports from {node.module}"
+                names += [a.name for a in node.names]
+            if isinstance(node, ast.ImportFrom) and node.module:
+                names.append(node.module)
+        return [n for n in names if n.startswith("arbiter")]
+
+    def test_roster_imports_only_the_pure_universe(self):
+        src = Path(__file__).resolve().parent / "robotics_roster.py"
+        arb = self._arbiter_imports(src)
+        for name in arb:
+            assert name in self._ALLOWED_ARBITER, f"roster imports disallowed arbiter module: {name}"
+            assert not any(s in name for s in self._FORBIDDEN_SUBSTRINGS), f"trade-seam import: {name}"
+
+    def test_canonical_universe_is_pure_data(self):
+        uni = _ARBITER_ROOT / "arbiter" / "data" / "robotics_universe.py"
+        arb = self._arbiter_imports(uni)
+        assert arb == [], f"canonical universe must import nothing from arbiter, got {arb}"
 
 
 # ---------------------------------------------------------------------------
