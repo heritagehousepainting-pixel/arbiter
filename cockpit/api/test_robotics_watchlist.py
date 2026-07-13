@@ -103,3 +103,52 @@ class TestRosterEntrySchema:
         )
         assert wl.generated == "2026-07-13"
         assert len(wl.entries) == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — roster data hygiene + display-only purity invariant
+# ---------------------------------------------------------------------------
+class TestRosterData:
+    def test_roster_nonempty_and_validates(self):
+        from cockpit.api.contract import RoboticsRosterEntry
+        from cockpit.api.robotics_roster import robotics_roster
+        rows = robotics_roster()
+        assert len(rows) >= 25
+        for r in rows:              # each row validates against the frozen DTO
+            RoboticsRosterEntry(**r)
+
+    def test_no_duplicate_symbols(self):
+        from cockpit.api.robotics_roster import robotics_roster
+        syms = [r["symbol"] for r in robotics_roster()]
+        assert len(syms) == len(set(syms)), "duplicate symbols in roster"
+
+    def test_every_layer_represented(self):
+        from cockpit.api.robotics_roster import robotics_roster
+        layers = {r["layer"] for r in robotics_roster()}
+        assert layers == {"compute", "brain", "components", "integrator", "deployment"}
+
+    def test_early_insight_rows_have_trigger(self):
+        from cockpit.api.robotics_roster import robotics_roster
+        for r in robotics_roster():
+            if r.get("early_insight"):
+                assert r.get("trigger"), f"{r['symbol']} early_insight without trigger"
+
+    def test_has_both_priceable_and_reference_rows(self):
+        from cockpit.api.robotics_roster import robotics_roster
+        rows = robotics_roster()
+        assert any(r["priceable"] for r in rows)        # US-listed charted core
+        assert any(not r["priceable"] for r in rows)    # foreign/private reference rows
+
+
+class TestRosterPurity:
+    def test_module_imports_nothing_from_arbiter(self):
+        """The display-only invariant: roster code cannot reach the trading system."""
+        import ast
+        src = Path(__file__).resolve().parent / "robotics_roster.py"
+        tree = ast.parse(src.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    assert not a.name.startswith("arbiter"), f"imports {a.name}"
+            if isinstance(node, ast.ImportFrom):
+                assert not (node.module or "").startswith("arbiter"), f"imports from {node.module}"
