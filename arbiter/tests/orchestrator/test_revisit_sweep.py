@@ -148,3 +148,32 @@ def test_limit_zero_disables(tmp_path):
 
     assert _sweep(conn, limit=0) == []
     assert _state_of(conn, idea_id) == IdeaState.FINAL_DECIDED.value
+
+
+def test_duplicate_active_slot_not_recycled(tmp_path):
+    """An idea whose (ticker, bucket) slot has ANOTHER active idea must NOT be
+    recycled — the replacement would be dedupe-dropped, abandoning the old idea
+    with no successor (and losing its eventual counterfactual label)."""
+    conn = _migrated_conn(tmp_path)
+    old_id = _seed_decided(conn, age_hours=72, ticker="NVDA")
+    young_id = _seed_decided(conn, age_hours=30, ticker="NVDA")  # same slot
+
+    fresh = _sweep(conn)
+
+    assert fresh == []
+    assert _state_of(conn, old_id) == IdeaState.FINAL_DECIDED.value
+    assert _state_of(conn, young_id) == IdeaState.FINAL_DECIDED.value
+
+
+def test_sole_holder_still_recycled_alongside_duplicates(tmp_path):
+    """Mixed book: the duplicated ticker is skipped, the sole-holder ticker
+    is recycled normally."""
+    conn = _migrated_conn(tmp_path)
+    _seed_decided(conn, age_hours=72, ticker="NVDA")
+    _seed_decided(conn, age_hours=30, ticker="NVDA")  # duplicate slot
+    solo_id = _seed_decided(conn, age_hours=48, ticker="MSFT")
+
+    fresh = _sweep(conn)
+
+    assert [i.ticker for i in fresh] == ["MSFT"]
+    assert _state_of(conn, solo_id) == IdeaState.ABANDONED.value

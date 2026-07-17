@@ -423,16 +423,37 @@ def run_revisit_sweep(
     cutoff = now - timedelta(hours=min_age_hours)
 
     rows = conn.execute(
-        "SELECT idea_id, ticker, thesis, horizon_days, as_of, updated_state_at "
+        "SELECT idea_id, ticker, thesis, horizon_days, as_of, updated_state_at, "
+        "dedupe_key_ticker, dedupe_key_bucket "
         "FROM ideas WHERE is_superseded = 0 AND state = ? "
         "ORDER BY updated_state_at ASC",
         (IdeaState.FINAL_DECIDED.value,),
     ).fetchall()
 
+    # Sole-holder guard (2026-07-17 live-funnel finding): only recycle an idea
+    # that is the ONLY active idea on its (ticker, bucket) slot.  Historical
+    # backlogs hold several duplicate FINAL_DECIDED ideas per slot; recycling
+    # one while a YOUNGER duplicate is still active gets the replacement
+    # dedupe-dropped in run_cycle — the old idea would be abandoned with NO
+    # successor, silently losing its eventual counterfactual outcome label.
+    # Once natural attrition (horizon expiry / this sweep) thins a slot to one
+    # holder, it recycles normally.
+    slot_counts: dict[tuple[str, str], int] = {}
+    for tk, bk in conn.execute(
+        "SELECT dedupe_key_ticker, dedupe_key_bucket FROM ideas "
+        "WHERE is_superseded = 0 AND state NOT IN (?, ?)",
+        (IdeaState.CLOSED.value, IdeaState.ABANDONED.value),
+    ).fetchall():
+        slot_counts[(tk, bk)] = slot_counts.get((tk, bk), 0) + 1
+
     fresh: list[Idea] = []
     for row in rows:
         if len(fresh) >= limit:
             break
+
+        slot = (row["dedupe_key_ticker"], row["dedupe_key_bucket"])
+        if slot_counts.get(slot, 0) > 1:
+            continue  # duplicate active holder — replacement would dedupe-drop
 
         stamped = datetime.fromisoformat(row["updated_state_at"])
         if stamped.tzinfo is None:  # same naive-row convention as _row_to_idea
