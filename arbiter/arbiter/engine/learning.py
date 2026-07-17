@@ -126,6 +126,7 @@ def build_learning_inputs(engine: "Engine", now: datetime):
         news_advisor_id=getattr(engine.config, "a3_advisor_id", "A3.news"),
         news_multiplier=float(getattr(engine.config, "a3_weight_multiplier", 1.0)),
         news_cap=float(getattr(engine.config, "a3_weight_cap", 1.0)),
+        parole_fraction=float(getattr(engine.config, "trust_parole_fraction", 0.5)),
     )
     return weight_bundle, calibrator
 

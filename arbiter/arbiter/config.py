@@ -201,6 +201,13 @@ class Config:
     # existing direct ``Config(...)`` constructions need no change.
     trust_equal_floor: float = 0.25
 
+    # Parole floor fraction (unfreeze Stage 2): a significantly-negative advisor
+    # BELOW the 30-outcome mute sample trades at trust_equal_floor × this
+    # fraction (default 0.5 → weight 0.125) instead of being hard-muted, so it
+    # keeps accruing the outcomes that decide its fate.  Defaulted so existing
+    # direct ``Config(...)`` constructions need no change.
+    trust_parole_fraction: float = 0.5
+
     # Dedupe cooldown (2026-07-10 unfreeze): a never-executed FINAL_DECIDED idea
     # blocks its (ticker,bucket) for only this many days, then frees the slot so
     # the ticker can be reconsidered (outcome labeling still runs at full horizon).
@@ -571,6 +578,10 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         trust_equal_floor=_env_float(
             "ARBITER_TRUST_EQUAL_FLOOR", float(core.get("trust_equal_floor", 0.25))
+        ),
+        trust_parole_fraction=_env_float(
+            "ARBITER_TRUST_PAROLE_FRACTION",
+            float(core.get("trust_parole_fraction", 0.5)),
         ),
         form13f_min_position_usd=_env_float("FORM13F_MIN_POSITION_USD", 10_000_000.0),
         form13f_min_book_fraction=_env_float("FORM13F_MIN_BOOK_FRACTION", 0.005),

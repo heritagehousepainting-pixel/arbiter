@@ -304,3 +304,16 @@ class TestRedactingRepr:
         # Must not raise; empty secrets are fine.
         repr(cfg)
         str(cfg)
+
+
+class TestTrustParoleFraction:
+    """Unfreeze Stage 2 config knob."""
+
+    def test_default(self):
+        cfg = load_config()
+        assert cfg.trust_parole_fraction == 0.5
+
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("ARBITER_TRUST_PAROLE_FRACTION", "0.3")
+        cfg = load_config()
+        assert cfg.trust_parole_fraction == 0.3

@@ -82,6 +82,7 @@ def resolve_weight_bundle(
     news_advisor_id: str | None = None,
     news_multiplier: float = 1.0,
     news_cap: float = 1.0,
+    parole_fraction: float = 0.5,
 ) -> WeightBundle:
     """Build the live ``WeightBundle`` handed to ``fuse``.
 
@@ -123,6 +124,20 @@ def resolve_weight_bundle(
                 ci_low=0.0,
                 ci_high=0.0,
                 shadow=True,
+            )
+            continue
+
+        if reason == PAROLE_REASON:
+            # Significantly negative but thin sample (unfreeze Stage 2): trade
+            # at a REDUCED floor, non-shadow, so it keeps accruing outcomes
+            # that either rehabilitate it or confirm the full-sample mute.
+            w = equal_floor * parole_fraction
+            resolved[advisor_id] = AdvisorWeight(
+                advisor_id=advisor_id,
+                weight=w,
+                ci_low=w,
+                ci_high=w,
+                shadow=False,
             )
             continue
 
