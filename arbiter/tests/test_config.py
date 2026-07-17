@@ -333,3 +333,16 @@ class TestIdeaRevisitKnobs:
         cfg = load_config()
         assert cfg.idea_revisit_limit == 10
         assert cfg.idea_revisit_min_age_hours == 12.0
+
+
+class TestMinPositionPct:
+    """Unfreeze Stage 4 config knob (live default 2%, env-overridable)."""
+
+    def test_live_default(self):
+        cfg = load_config()
+        assert cfg.min_position_pct == 0.02
+
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("ARBITER_MIN_POSITION_PCT", "0.03")
+        cfg = load_config()
+        assert cfg.min_position_pct == 0.03

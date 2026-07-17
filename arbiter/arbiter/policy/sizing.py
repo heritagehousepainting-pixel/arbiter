@@ -169,6 +169,17 @@ def compute_size(
     if fusion.cold_start:
         size *= _COLD_START_MULTIPLIER
 
+    # Step 7.5: Minimum position floor (unfreeze Stage 4 — deployment pressure).
+    # A trade that cleared conviction + caps is worth at least
+    # min_position_pct × equity — dust-sized entries deploy nothing and still
+    # cost a position slot.  The floor is re-clamped by every headroom cap
+    # (it can never breach one) and the ADV cap below still applies LAST.
+    # It only lifts LIVE sizes: a cap-rejected (0) size stays rejected.
+    floor_notional = getattr(config, "min_position_pct", 0.0) * portfolio_equity
+    if floor_notional > 0.0 and size > 0.0:
+        size = max(size, floor_notional)
+        size = min(size, name_headroom, sector_headroom, gross_headroom)
+
     # Step 8: ADV liquidity cap — LAST transform
     adv = adv_provider(ticker, as_of)
     if adv is None or math.isnan(adv):

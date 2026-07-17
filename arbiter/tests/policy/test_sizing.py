@@ -584,3 +584,86 @@ class TestSizingTrace:
             trace=bad_trace,
         )
         assert size == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Minimum position size floor (unfreeze Stage 4 — deployment pressure)
+# ---------------------------------------------------------------------------
+
+class TestMinPositionFloor:
+    """Conviction-qualified floor: a trade that clears the bar is worth at
+    least min_position_pct × equity — but the floor never breaches a cap."""
+
+    def _cfg_with_floor(self, cfg, pct):
+        import dataclasses
+        return dataclasses.replace(cfg, min_position_pct=pct)
+
+    def test_floor_raises_small_size(self, cfg):
+        """conviction 0.05 → raw $1250 on $100k; floor 2% → $2000."""
+        size = compute_size(
+            fusion=make_fusion(conviction=0.05, cold_start=False),
+            portfolio_equity=PORTFOLIO,
+            config=self._cfg_with_floor(cfg, 0.02),
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="FLOOR",
+            as_of=_as_of(),
+        )
+        assert size == pytest.approx(0.02 * PORTFOLIO)
+
+    def test_floor_clamped_by_name_headroom(self, cfg):
+        """Floor never breaches the per-name cap headroom."""
+        headroom_target = 1_500.0  # name cap 5% of 100k = 5000; held 3500
+        size = compute_size(
+            fusion=make_fusion(conviction=0.05, cold_start=False),
+            portfolio_equity=PORTFOLIO,
+            config=self._cfg_with_floor(cfg, 0.02),
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="CLAMP",
+            as_of=_as_of(),
+            current_name_exposure=cfg.max_position_pct * PORTFOLIO - headroom_target,
+        )
+        assert size == pytest.approx(headroom_target)
+
+    def test_zero_floor_is_legacy_behavior(self, cfg):
+        """min_position_pct=0 (the bare-Config default) → exact legacy size."""
+        size = compute_size(
+            fusion=make_fusion(conviction=0.05, cold_start=False),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="LEGACY",
+            as_of=_as_of(),
+        )
+        assert size == pytest.approx(0.25 * 0.05 * PORTFOLIO)  # $1250
+
+    def test_adv_cap_still_binds_after_floor(self, cfg):
+        """ADV cap is the LAST transform — floor cannot bypass it."""
+        adv = 10_000.0  # adv cap = 2% × 10k = $200 < $2000 floor
+        size = compute_size(
+            fusion=make_fusion(conviction=0.05, cold_start=False),
+            portfolio_equity=PORTFOLIO,
+            config=self._cfg_with_floor(cfg, 0.02),
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(adv),
+            ticker="ADVCAP",
+            as_of=_as_of(),
+        )
+        assert size == pytest.approx(0.02 * adv)
+
+    def test_floor_does_not_resurrect_zero_size(self, cfg):
+        """A size already clamped to 0 by caps stays 0 — the floor only lifts
+        LIVE (positive) sizes, it never creates a trade the caps rejected."""
+        size = compute_size(
+            fusion=make_fusion(conviction=0.05, cold_start=False),
+            portfolio_equity=PORTFOLIO,
+            config=self._cfg_with_floor(cfg, 0.02),
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="DEAD",
+            as_of=_as_of(),
+            current_gross_exposure=cfg.max_gross_pct * PORTFOLIO,
+        )
+        assert size == 0.0

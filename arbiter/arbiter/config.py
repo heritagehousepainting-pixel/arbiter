@@ -214,6 +214,15 @@ class Config:
     # Defaulted so existing direct ``Config(...)`` constructions need no change.
     dedupe_cooldown_days: int = 3
 
+    # Minimum position size floor (unfreeze Stage 4 — deployment pressure): a
+    # trade whose conviction cleared the bar is sized at least this fraction
+    # of equity, re-clamped by every headroom cap and the ADV cap (the floor
+    # can never breach a cap or resurrect a cap-rejected trade).  Dataclass
+    # default 0.0 = OFF so existing direct ``Config(...)`` constructions (and
+    # their exact-size tests) are unchanged; ``load_config`` defaults the LIVE
+    # value to 0.02 (2% ≈ $200 on the $10k paper book).
+    min_position_pct: float = 0.0
+
     # Revisit sweep (unfreeze Stage 3): unexecuted FINAL_DECIDED ideas are
     # recycled into fresh ideas once per day (min-age) so the backlog re-fuses
     # against fresh opinions instead of dying one-shot.  ``limit`` bounds the
@@ -538,6 +547,7 @@ def load_config(config_path: Path | None = None) -> Config:
         audit_path=_env_str("ARBITER_AUDIT_PATH", str(storage.get("audit_path", "data/audit.jsonl"))),
         metrics_path=_env_str("ARBITER_METRICS_PATH", str(storage.get("metrics_path", "data/metrics.jsonl"))),
         max_position_pct=_env_float("ARBITER_MAX_POSITION_PCT", float(sizing.get("max_position_pct", 0.05))),
+        min_position_pct=_env_float("ARBITER_MIN_POSITION_PCT", float(sizing.get("min_position_pct", 0.02))),
         max_sector_pct=_env_float("ARBITER_MAX_SECTOR_PCT", float(sizing.get("max_sector_pct", 0.20))),
         max_gross_pct=_env_float("ARBITER_MAX_GROSS_PCT", float(sizing.get("max_gross_pct", 0.80))),
         max_open_positions=_env_int("ARBITER_MAX_OPEN_POSITIONS", int(sizing.get("max_open_positions", 20))),
