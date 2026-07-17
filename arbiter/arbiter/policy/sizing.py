@@ -71,6 +71,7 @@ def compute_size(
     current_gross_exposure: float = 0.0,
     current_open_positions: int = 0,
     current_name_exposure: float = 0.0,
+    trace: Callable[[str, dict], None] | None = None,
 ) -> float:
     """Compute final position size (notional USD) for one ticker.
 
@@ -110,12 +111,23 @@ def compute_size(
         open-position-count gate is skipped (an add-on does not open a NEW
         position).  Default 0.0 keeps every existing caller unchanged.
     """
+    def _t(reason: str) -> None:
+        # Trace is diagnostics-only: a broken callback must never abort sizing.
+        if trace is None:
+            return
+        try:
+            trace("size", {"reason": reason, "ticker": ticker})
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     # Fail-closed: gate disallows trading
     if not gate_decision.allowed or gate_decision.size_multiplier == 0.0:
+        _t("gate_blocked")
         return 0.0
 
     # Zero conviction → no position
     if fusion.conviction == 0.0:
+        _t("zero_conviction")
         return 0.0
 
     # Step 1: Quarter-Kelly raw size
@@ -137,10 +149,17 @@ def compute_size(
     gross_headroom = max(0.0, gross_max - current_gross_exposure)
     size = min(size, gross_headroom)
 
+    # Caps can clamp the size all the way to zero (no headroom left) — a
+    # distinct outcome from the count gate below, so trace it separately.
+    if size <= 0.0:
+        _t("caps_exhausted")
+        return 0.0
+
     # Step 5: Open-position count cap — if at capacity, no new positions.
     # An ADD-ON (nonzero name exposure) does not open a NEW position, so the
     # count gate does not apply to it.
     if current_open_positions >= config.max_open_positions and current_name_exposure <= 0.0:
+        _t("position_count_full")
         return 0.0
 
     # Step 6: Gate size_multiplier
@@ -150,11 +169,23 @@ def compute_size(
     if fusion.cold_start:
         size *= _COLD_START_MULTIPLIER
 
+    # Step 7.5: Minimum position floor (unfreeze Stage 4 — deployment pressure).
+    # A trade that cleared conviction + caps is worth at least
+    # min_position_pct × equity — dust-sized entries deploy nothing and still
+    # cost a position slot.  The floor is re-clamped by every headroom cap
+    # (it can never breach one) and the ADV cap below still applies LAST.
+    # It only lifts LIVE sizes: a cap-rejected (0) size stays rejected.
+    floor_notional = getattr(config, "min_position_pct", 0.0) * portfolio_equity
+    if floor_notional > 0.0 and size > 0.0:
+        size = max(size, floor_notional)
+        size = min(size, name_headroom, sector_headroom, gross_headroom)
+
     # Step 8: ADV liquidity cap — LAST transform
     adv = adv_provider(ticker, as_of)
     if adv is None or math.isnan(adv):
         # Fail-closed: missing or NaN ADV → size 0.
         # math.isnan guard prevents min(x, nan)==x from bypassing the cap.
+        _t("adv_missing")
         return 0.0
 
     adv_cap = config.adv_cap_pct * adv

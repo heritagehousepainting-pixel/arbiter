@@ -439,3 +439,99 @@ class TestDecideAll:
             f"UNKNOWN sector cap violated: total_qty={total_qty} > "
             f"max={cfg.max_sector_pct * PORTFOLIO}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Trace callback (unfreeze Stage 1 — decision tracing)
+# ---------------------------------------------------------------------------
+
+class TestDecideTrace:
+    """decide(trace=...) reports WHY an idea produced no order."""
+
+    @staticmethod
+    def _collect():
+        events: list[tuple[str, dict]] = []
+
+        def trace(event: str, payload: dict) -> None:
+            events.append((event, payload))
+
+        return events, trace
+
+    def _decide_traced(self, trace, conviction=0.5, adv_usd=10_000_000.0,
+                       gate_allowed=True, gate_multiplier=1.0):
+        from arbiter.config import Config
+
+        cfg = Config(
+            live_trading=False, db_path=":memory:", audit_path="/dev/null",
+            executor_backend="sim",
+            metrics_path="/dev/null", max_position_pct=0.05, max_sector_pct=0.20,
+            max_gross_pct=0.80, max_open_positions=20, adv_cap_pct=0.02,
+            alpaca_api_key="", alpaca_secret_key="", alpaca_paper_base_url="",
+            alpaca_data_base_url="", alpaca_timeout=20.0, edgar_user_agent="",
+            kill_switch_url="", alert_webhook_url="",
+        )
+        gate_decision = TradingDecision(
+            allowed=gate_allowed, size_multiplier=gate_multiplier,
+            level=DegradationLevel.NORMAL if gate_allowed else DegradationLevel.HALTED,
+            reasons=[],
+        )
+        adv_fn = adv_always(adv_usd) if adv_usd is not None else adv_missing()
+        return decide(
+            ticker="TRACED",
+            bucket_outputs={
+                HorizonBucket.SHORT: make_fusion(
+                    bucket=HorizonBucket.SHORT, conviction=conviction, cold_start=False
+                )
+            },
+            account=object(),
+            gate=lambda account, count: gate_decision,
+            adv_provider=adv_fn,
+            clock=FakeClock(),
+            config=cfg,
+            portfolio_equity=PORTFOLIO,
+            entry_price=ENTRY_PRICE,
+            trace=trace,
+        )
+
+    def test_flat_conviction_traced_with_value(self):
+        events, trace = self._collect()
+        orders = self._decide_traced(trace, conviction=0.01)
+        assert orders == []
+        decide_events = [p for (e, p) in events if e == "decide"]
+        assert any(
+            p["reason"] == "flat_conviction"
+            and p["ticker"] == "TRACED"
+            and p["conviction"] == 0.01
+            and p["bucket"] == HorizonBucket.SHORT.value
+            for p in decide_events
+        )
+
+    def test_size_zero_traced_and_sizing_reason_forwarded(self):
+        """ADV-missing: sizing emits adv_missing AND decide emits size_zero."""
+        events, trace = self._collect()
+        orders = self._decide_traced(trace, conviction=0.5, adv_usd=None)
+        assert orders == []
+        assert ("size", {"reason": "adv_missing", "ticker": "TRACED"}) in events
+        decide_events = [p for (e, p) in events if e == "decide"]
+        assert any(
+            p["reason"] == "size_zero" and p["bucket"] == HorizonBucket.SHORT.value
+            for p in decide_events
+        )
+
+    def test_gate_blocked_traced(self):
+        events, trace = self._collect()
+        orders = self._decide_traced(trace, gate_allowed=False, gate_multiplier=0.0)
+        assert orders == []
+        decide_events = [p for (e, p) in events if e == "decide"]
+        assert any(p["reason"] == "gate_blocked" for p in decide_events)
+
+    def test_no_trace_unchanged(self):
+        orders = _decide(conviction=0.5)
+        assert len(orders) == 1
+
+    def test_raising_trace_never_breaks_decide(self):
+        def bad_trace(event: str, payload: dict) -> None:
+            raise RuntimeError("boom")
+
+        orders = self._decide_traced(bad_trace, conviction=0.5)
+        assert len(orders) == 1

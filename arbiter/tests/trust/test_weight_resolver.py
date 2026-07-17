@@ -9,6 +9,8 @@ Covers D1/D3/D6:
 """
 from __future__ import annotations
 
+import pytest
+
 from arbiter.contract.seams import AdvisorWeight, WeightBundle
 from arbiter.trust.weight_resolver import (
     EQUAL_FLOOR,
@@ -200,3 +202,37 @@ def test_news_negative_skill_not_rescued_by_boost():
     )
     assert rb.weights[NEWS].weight == 0.0
     assert rb.weights[NEWS].shadow is True
+
+
+# ---------------------------------------------------------------------------
+# Parole (unfreeze Stage 2)
+# ---------------------------------------------------------------------------
+
+def test_parole_advisor_floored_at_reduced_fraction():
+    """cap_reason='parole' → equal_floor × parole_fraction, NON-shadow: the
+    advisor keeps trading small instead of being benched."""
+    rb = resolve_weight_bundle(
+        None, ["A1.thin"], equal_floor=0.25,
+        cap_reasons={"A1.thin": "parole"},
+        parole_fraction=0.5,
+    )
+    assert rb.weights["A1.thin"].weight == pytest.approx(0.125)
+    assert rb.weights["A1.thin"].shadow is False
+
+
+def test_parole_default_fraction_is_half():
+    rb = resolve_weight_bundle(
+        None, ["A1.thin"], equal_floor=0.25,
+        cap_reasons={"A1.thin": "parole"},
+    )
+    assert rb.weights["A1.thin"].weight == pytest.approx(0.125)
+
+
+def test_negative_skill_still_hard_muted_not_parole():
+    rb = resolve_weight_bundle(
+        None, ["A1.bad"], equal_floor=0.25,
+        cap_reasons={"A1.bad": "negative_skill"},
+        parole_fraction=0.5,
+    )
+    assert rb.weights["A1.bad"].weight == 0.0
+    assert rb.weights["A1.bad"].shadow is True

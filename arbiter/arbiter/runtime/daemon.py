@@ -75,6 +75,7 @@ class DaemonState:
     backoff_s: float = 0.0
     consecutive_recoveries: int = 0     # auto-recoveries since the last clean iteration
     recovery_capped_alerted: bool = False  # one-shot alert when the cap is hit
+    idle_sessions: int = 0              # consecutive closed sessions under-deployed (unfreeze #4)
 
 
 def _heartbeat(path: str | None, payload: dict) -> None:
@@ -337,7 +338,7 @@ def run_daemon(
                 # Open → closed transition (C6): final reconcile + outcome sweep,
                 # ONCE, owned by the daemon (the 18:30 one-shot is a down-fallback).
                 if state.last_session_open:
-                    _run_post_close_sweep(engine, now)
+                    _run_post_close_sweep(engine, now, state)
                 state.last_session_open = False
                 _heartbeat(heartbeat_path, _hb(now, session, engine, state, "closed"))
                 state.backoff_s = 0.0
@@ -450,7 +451,11 @@ def _run_full_cycle(engine: Any, ingest_fn: Callable[[], Any] | None, now: datet
     engine.run_cycle(as_of=now)
 
 
-def _run_post_close_sweep(engine: Any, now: datetime) -> None:
+_IDLE_DEPLOYMENT_THRESHOLD = 0.50   # deployment below this counts as an idle session
+_IDLE_SESSIONS_TO_ALERT = 3         # consecutive idle sessions before the phone ping
+
+
+def _run_post_close_sweep(engine: Any, now: datetime, state: "DaemonState | None" = None) -> None:
     """C6: post-close full reconcile + outcome sweep at the open→closed edge."""
     log.info("daemon.session_closed", as_of=now.isoformat())
     try:
@@ -474,6 +479,48 @@ def _run_post_close_sweep(engine: Any, now: datetime) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("daemon.post_close_sweep_failed", error=str(exc))
+
+    # Idle-capital alert (unfreeze Stage 4 — deployment pressure).  Deployment
+    # below the threshold for N CONSECUTIVE closed sessions → one warning-tier
+    # phone ping carrying the last cycle-funnel counts (WHY it is idle), then
+    # the streak resets.  Fail-safe: any error logs and never aborts the sweep.
+    if state is None:
+        return
+    try:
+        acct = engine.executor.get_account()
+        equity = float(getattr(acct, "equity", 0.0) or 0.0)
+        if equity <= 0.0:
+            return  # no readable equity — don't count a phantom idle session
+        cash = float(getattr(acct, "cash", 0.0) or 0.0)
+        deployment = 1.0 - (cash / equity)
+        if deployment >= _IDLE_DEPLOYMENT_THRESHOLD:
+            state.idle_sessions = 0
+            return
+        state.idle_sessions += 1
+        log.info(
+            "daemon.idle_session",
+            deployment_pct=round(deployment * 100.0, 1),
+            consecutive=state.idle_sessions,
+        )
+        if state.idle_sessions < _IDLE_SESSIONS_TO_ALERT:
+            return
+        state.idle_sessions = 0  # reset BEFORE alerting — never double-fire
+        funnel = dict(getattr(engine, "last_cycle_funnel", {}) or {})
+        engine.alerting.alert(
+            "warning",
+            (
+                f"Capital idle: only {round(deployment * 100.0, 1)}% deployed "
+                f"for {_IDLE_SESSIONS_TO_ALERT} consecutive sessions "
+                f"(target 75-85%). Last cycle funnel: {funnel}"
+            ),
+            ctx={
+                "deployment_pct": round(deployment * 100.0, 1),
+                "as_of": now.isoformat(),
+                **funnel,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("daemon.idle_alert_failed", error=str(exc))
 
 
 def _until_next_open_capped(now: datetime, session: Any) -> float:

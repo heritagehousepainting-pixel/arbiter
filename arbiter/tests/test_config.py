@@ -304,3 +304,45 @@ class TestRedactingRepr:
         # Must not raise; empty secrets are fine.
         repr(cfg)
         str(cfg)
+
+
+class TestTrustParoleFraction:
+    """Unfreeze Stage 2 config knob."""
+
+    def test_default(self):
+        cfg = load_config()
+        assert cfg.trust_parole_fraction == 0.5
+
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("ARBITER_TRUST_PAROLE_FRACTION", "0.3")
+        cfg = load_config()
+        assert cfg.trust_parole_fraction == 0.3
+
+
+class TestIdeaRevisitKnobs:
+    """Unfreeze Stage 3 config knobs."""
+
+    def test_defaults(self):
+        cfg = load_config()
+        assert cfg.idea_revisit_limit == 50
+        assert cfg.idea_revisit_min_age_hours == 24.0
+
+    def test_env_overrides(self, monkeypatch):
+        monkeypatch.setenv("ARBITER_IDEA_REVISIT_LIMIT", "10")
+        monkeypatch.setenv("ARBITER_IDEA_REVISIT_MIN_AGE_HOURS", "12")
+        cfg = load_config()
+        assert cfg.idea_revisit_limit == 10
+        assert cfg.idea_revisit_min_age_hours == 12.0
+
+
+class TestMinPositionPct:
+    """Unfreeze Stage 4 config knob (live default 2%, env-overridable)."""
+
+    def test_live_default(self):
+        cfg = load_config()
+        assert cfg.min_position_pct == 0.02
+
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("ARBITER_MIN_POSITION_PCT", "0.03")
+        cfg = load_config()
+        assert cfg.min_position_pct == 0.03

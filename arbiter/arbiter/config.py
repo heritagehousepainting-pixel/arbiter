@@ -201,11 +201,35 @@ class Config:
     # existing direct ``Config(...)`` constructions need no change.
     trust_equal_floor: float = 0.25
 
+    # Parole floor fraction (unfreeze Stage 2): a significantly-negative advisor
+    # BELOW the 30-outcome mute sample trades at trust_equal_floor × this
+    # fraction (default 0.5 → weight 0.125) instead of being hard-muted, so it
+    # keeps accruing the outcomes that decide its fate.  Defaulted so existing
+    # direct ``Config(...)`` constructions need no change.
+    trust_parole_fraction: float = 0.5
+
     # Dedupe cooldown (2026-07-10 unfreeze): a never-executed FINAL_DECIDED idea
     # blocks its (ticker,bucket) for only this many days, then frees the slot so
     # the ticker can be reconsidered (outcome labeling still runs at full horizon).
     # Defaulted so existing direct ``Config(...)`` constructions need no change.
     dedupe_cooldown_days: int = 3
+
+    # Minimum position size floor (unfreeze Stage 4 — deployment pressure): a
+    # trade whose conviction cleared the bar is sized at least this fraction
+    # of equity, re-clamped by every headroom cap and the ADV cap (the floor
+    # can never breach a cap or resurrect a cap-rejected trade).  Dataclass
+    # default 0.0 = OFF so existing direct ``Config(...)`` constructions (and
+    # their exact-size tests) are unchanged; ``load_config`` defaults the LIVE
+    # value to 0.02 (2% ≈ $200 on the $10k paper book).
+    min_position_pct: float = 0.0
+
+    # Revisit sweep (unfreeze Stage 3): unexecuted FINAL_DECIDED ideas are
+    # recycled into fresh ideas once per day (min-age) so the backlog re-fuses
+    # against fresh opinions instead of dying one-shot.  ``limit`` bounds the
+    # follow-on A3/Finnhub load per cycle; <= 0 disables.  Defaulted so
+    # existing direct ``Config(...)`` constructions need no change.
+    idea_revisit_limit: int = 50
+    idea_revisit_min_age_hours: float = 24.0
 
     # Stuck pre-execution sweep (2026-07-10 deadlock fix): a GATHERING or
     # PROVISIONAL_DECIDED idea stranded by a PRIOR cycle (a mid-cycle broker-fatal
@@ -523,6 +547,7 @@ def load_config(config_path: Path | None = None) -> Config:
         audit_path=_env_str("ARBITER_AUDIT_PATH", str(storage.get("audit_path", "data/audit.jsonl"))),
         metrics_path=_env_str("ARBITER_METRICS_PATH", str(storage.get("metrics_path", "data/metrics.jsonl"))),
         max_position_pct=_env_float("ARBITER_MAX_POSITION_PCT", float(sizing.get("max_position_pct", 0.05))),
+        min_position_pct=_env_float("ARBITER_MIN_POSITION_PCT", float(sizing.get("min_position_pct", 0.02))),
         max_sector_pct=_env_float("ARBITER_MAX_SECTOR_PCT", float(sizing.get("max_sector_pct", 0.20))),
         max_gross_pct=_env_float("ARBITER_MAX_GROSS_PCT", float(sizing.get("max_gross_pct", 0.80))),
         max_open_positions=_env_int("ARBITER_MAX_OPEN_POSITIONS", int(sizing.get("max_open_positions", 20))),
@@ -532,6 +557,10 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         dedupe_cooldown_days=_env_int("ARBITER_DEDUPE_COOLDOWN_DAYS", 3),
         stuck_idea_max_age_hours=_env_float("ARBITER_STUCK_IDEA_MAX_AGE_HOURS", 2.0),
+        idea_revisit_limit=_env_int("ARBITER_IDEA_REVISIT_LIMIT", 50),
+        idea_revisit_min_age_hours=_env_float(
+            "ARBITER_IDEA_REVISIT_MIN_AGE_HOURS", 24.0
+        ),
         alpaca_api_key=_env_str("ALPACA_API_KEY", str(alpaca.get("api_key", ""))),
         alpaca_secret_key=_env_str("ALPACA_SECRET_KEY", str(alpaca.get("secret_key", ""))),
         alpaca_paper_base_url=alpaca_paper_base_url,
@@ -571,6 +600,10 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         trust_equal_floor=_env_float(
             "ARBITER_TRUST_EQUAL_FLOOR", float(core.get("trust_equal_floor", 0.25))
+        ),
+        trust_parole_fraction=_env_float(
+            "ARBITER_TRUST_PAROLE_FRACTION",
+            float(core.get("trust_parole_fraction", 0.5)),
         ),
         form13f_min_position_usd=_env_float("FORM13F_MIN_POSITION_USD", 10_000_000.0),
         form13f_min_book_fraction=_env_float("FORM13F_MIN_BOOK_FRACTION", 0.005),

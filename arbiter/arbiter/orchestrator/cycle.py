@@ -84,6 +84,7 @@ class CycleResult:
     """
     ideas_processed: int = 0
     ideas_skipped_dedupe: int = 0
+    ideas_no_opinions: int = 0
     opinions_gathered: int = 0
     opinions_null: int = 0
     orders_submitted: int = 0
@@ -109,6 +110,7 @@ def run_cycle(
     on_transition: Callable[[Idea, IdeaState], None] | None = None,
     express: ExpressCallable | None = None,
     dedupe_cooldown_days: int = 3,
+    trace: Callable[[str, dict], None] | None = None,
 ) -> CycleResult:
     """Run one full decision cycle.
 
@@ -160,6 +162,15 @@ def run_cycle(
     result = CycleResult()
     now = clock.now()
     all_active = list(active_ideas or [])
+
+    def _trace(reason: str, **extra: object) -> None:
+        """Diagnostics-only trace — a broken callback never aborts the cycle."""
+        if trace is None:
+            return
+        try:
+            trace("cycle", {"reason": reason, **extra})
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("cycle trace callback failed: %s", exc)
 
     def _emit_new_idea(idea: Idea) -> None:
         """Invoke the on_new_idea callback fail-safe (never aborts the cycle)."""
@@ -259,6 +270,13 @@ def run_cycle(
                 "No opinions for bucket %s — skipping fusion/decision for idea %s",
                 bucket.value,
                 idea.idea_id,
+            )
+            result.ideas_no_opinions += 1
+            _trace(
+                "no_opinions",
+                idea_id=idea.idea_id,
+                ticker=idea.ticker,
+                bucket=bucket.value,
             )
             continue
 

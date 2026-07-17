@@ -84,6 +84,7 @@ def decide(
     current_open_positions: int = 0,
     current_name_exposure: float = 0.0,
     entry_price: float = 100.0,
+    trace: Callable[[str, dict], None] | None = None,
 ) -> list[PaperOrder]:
     """Produce PaperOrders for one ticker across all active horizon buckets.
 
@@ -134,9 +135,19 @@ def decide(
     as_of: datetime = clock.now()
     entry_date: date = as_of.date()
 
+    def _t(reason: str, **extra: object) -> None:
+        # Trace is diagnostics-only: a broken callback must never abort decide.
+        if trace is None:
+            return
+        try:
+            trace("decide", {"reason": reason, "ticker": ticker, **extra})
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     # Check gate once per ticker call (same account state for all buckets)
     gate_decision: TradingDecision = gate(account, live_advisor_count)
     if not gate_decision.allowed:
+        _t("gate_blocked")
         return []
 
     advisor_signature = _build_advisor_signature(bucket_outputs, ticker)
@@ -144,6 +155,11 @@ def decide(
     for bucket, fusion in bucket_outputs.items():
         side = _conviction_to_side(fusion.conviction)
         if side is None:
+            _t(
+                "flat_conviction",
+                bucket=bucket.value,
+                conviction=fusion.conviction,
+            )
             continue  # flat — no position
 
         size = compute_size(
@@ -158,9 +174,11 @@ def decide(
             current_gross_exposure=current_gross_exposure,
             current_open_positions=current_open_positions,
             current_name_exposure=current_name_exposure,
+            trace=trace,
         )
 
         if size <= 0.0:
+            _t("size_zero", bucket=bucket.value)
             continue
 
         exits = compute_exits(

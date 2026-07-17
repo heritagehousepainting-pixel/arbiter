@@ -40,8 +40,10 @@ from typing import Callable
 from arbiter.contract.seams import Idea
 from arbiter.data.clock import Clock
 from arbiter.data.pit import PITGateway
+import arbiter.db.audit as _audit_mod
 from arbiter.evaluation import attribution
 from arbiter.orchestrator import idea_store
+from arbiter.orchestrator.idea import make_idea
 from arbiter.orchestrator.outcome_sweep import sweep_outcomes
 from arbiter.types import IdeaState
 
@@ -374,3 +376,114 @@ def _has_sell_order(conn: sqlite3.Connection, idea: Idea) -> bool:
         (idea.idea_id, ticker, bucket),
     ).fetchone()
     return row is not None
+
+
+def run_revisit_sweep(
+    conn: sqlite3.Connection,
+    *,
+    clock: Clock,
+    min_age_hours: float = 24.0,
+    limit: int = 50,
+    audit_path: str | Path | None = None,
+) -> list[Idea]:
+    """Recycle unexecuted FINAL_DECIDED ideas into a standing book (unfreeze #3).
+
+    Before this sweep a decided-but-never-executed idea died ONE-SHOT: its
+    (ticker, bucket) slot stayed dedupe-blocked and the thesis was never
+    re-fused against fresh opinions until the horizon elapsed (at which point
+    ``run_unexecuted_sweep`` counterfactually labels + abandons it).  During
+    the 2026-07 freeze, 170 filing-backlog ideas got exactly one after-hours
+    decide and then sat inert.
+
+    Eligibility (mirrors the guards of the sibling sweeps):
+    - state FINAL_DECIDED, not superseded;
+    - ``updated_state_at`` older than ``min_age_hours`` (time-in-state, same
+      age basis as ``run_stuck_idea_sweep`` — never sweeps the current cycle);
+    - horizon NOT elapsed (elapsed ideas belong to ``run_unexecuted_sweep``,
+      which owns their counterfactual outcome label);
+    - not owned by a live/filled order (pending/partial/filled — the same
+      order guard as ``run_unexecuted_sweep``).
+
+    Action per idea, oldest-first, capped at ``limit`` (bounds the A3/Finnhub
+    load of the follow-on cycle): transition the old idea → ABANDONED (legal
+    from any pre-EXECUTED state; frees the dedupe slot) and return a FRESH
+    ``NASCENT`` idea for the same (ticker, thesis, horizon) stamped
+    ``as_of=now``.  The CALLER (engine ``run_cycle``) feeds the fresh ideas
+    into the current cycle, where they persist + fuse through the normal
+    lifecycle.  No outcome is labeled here: abandoning a superseded-by-revisit
+    idea is bookkeeping, not a falsified call — the final descendant that
+    reaches horizon expiry unexecuted still gets its counterfactual label.
+
+    ``limit <= 0`` disables the sweep (fail-safe kill switch).
+    """
+    if limit <= 0:
+        return []
+
+    now = clock.now()
+    cutoff = now - timedelta(hours=min_age_hours)
+
+    rows = conn.execute(
+        "SELECT idea_id, ticker, thesis, horizon_days, as_of, updated_state_at "
+        "FROM ideas WHERE is_superseded = 0 AND state = ? "
+        "ORDER BY updated_state_at ASC",
+        (IdeaState.FINAL_DECIDED.value,),
+    ).fetchall()
+
+    fresh: list[Idea] = []
+    for row in rows:
+        if len(fresh) >= limit:
+            break
+
+        stamped = datetime.fromisoformat(row["updated_state_at"])
+        if stamped.tzinfo is None:  # same naive-row convention as _row_to_idea
+            stamped = stamped.replace(tzinfo=timezone.utc)
+        if stamped >= cutoff:
+            continue  # too young — decided this cycle/day
+
+        info_ts = datetime.fromisoformat(row["as_of"])
+        if info_ts.tzinfo is None:
+            info_ts = info_ts.replace(tzinfo=timezone.utc)
+        if info_ts + timedelta(days=int(row["horizon_days"])) <= now:
+            continue  # horizon elapsed — run_unexecuted_sweep owns it
+
+        order_row = conn.execute(
+            "SELECT COUNT(*) AS c FROM orders WHERE idea_id = ? "
+            "AND status IN ('pending', 'partial', 'filled')",
+            (row["idea_id"],),
+        ).fetchone()
+        if int(order_row["c"] if "c" in order_row.keys() else order_row[0]) > 0:
+            continue  # a live/filled order owns this idea's lifecycle
+
+        idea_store.update_idea_state(
+            conn,
+            row["idea_id"],
+            IdeaState.ABANDONED,
+            updated_state_at=now,
+            audit_path=audit_path,
+        )
+        new_idea = make_idea(
+            ticker=row["ticker"],
+            thesis=row["thesis"],
+            horizon_days=int(row["horizon_days"]),
+            as_of=now,
+        )
+        fresh.append(new_idea)
+        _audit_mod.audit(
+            "idea_revisit.reopened",
+            {
+                "old_idea_id": row["idea_id"],
+                "new_idea_id": new_idea.idea_id,
+                "ticker": row["ticker"],
+                "horizon_days": int(row["horizon_days"]),
+            },
+            ts=now.isoformat(),
+            audit_path=audit_path,
+        )
+        logger.info(
+            "revisit_sweep: recycled unexecuted idea %s (%s) -> %s",
+            row["idea_id"],
+            row["ticker"],
+            new_idea.idea_id,
+        )
+
+    return fresh

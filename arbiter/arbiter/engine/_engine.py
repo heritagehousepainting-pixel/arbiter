@@ -157,6 +157,10 @@ class Engine:
     # Opinions).  ``None`` or a noop-returning fn when MIROFISH_ENDPOINT unset.
     a2_mirofish_fn: "Callable[[Idea], list[Opinion]] | None" = field(default=None)
 
+    # Last cycle's decision-funnel counts (unfreeze Stage 1) — written by
+    # run_cycle's ``_emit_funnel``; read by the daemon's idle-capital alert.
+    last_cycle_funnel: dict = field(default_factory=dict)
+
     # ------------------------------------------------------------------
     # Learning loop (sub-project #4) — long-lived stateful members.
     # ``ledger`` carries last_update_at/outcomes_at_last_update so the
@@ -576,6 +580,75 @@ class Engine:
         # the catalyst gate below can see this cycle's fresh filing tickers.
         signals = detect_signals(self.conn, now)
 
+        # ------------------------------------------------------------------
+        # Decision funnel (unfreeze Stage 1): count WHERE ideas die this cycle
+        # and leave a per-skip audit trail.  ``_trace`` is handed down through
+        # run_cycle → decide → compute_size; every callback is fail-safe.
+        # ------------------------------------------------------------------
+        _funnel: dict[str, int] = {
+            "ideas": 0,
+            "skipped_dedupe": 0,
+            "no_opinions": 0,
+            "flat_conviction": 0,
+            "size_zero": 0,
+            "submitted": 0,
+        }
+
+        def _trace(event: str, payload: dict) -> None:
+            try:
+                reason = str(payload.get("reason", ""))
+                if reason in _funnel:
+                    _funnel[reason] += 1
+                _audit_mod.audit(
+                    "decide.skip",
+                    payload,
+                    ts=now.isoformat(),
+                    audit_path=self.config.audit_path,
+                )
+            except Exception:  # noqa: BLE001, S110
+                pass  # diagnostics must never abort the cycle
+
+        def _emit_funnel(result: CycleResult | None) -> None:
+            try:
+                if result is not None:
+                    _funnel["ideas"] = result.ideas_processed
+                    _funnel["skipped_dedupe"] = result.ideas_skipped_dedupe
+                    _funnel["no_opinions"] = result.ideas_no_opinions
+                    _funnel["submitted"] = result.orders_submitted
+                _audit_mod.audit(
+                    "cycle_funnel",
+                    dict(_funnel),
+                    ts=now.isoformat(),
+                    audit_path=self.config.audit_path,
+                )
+                log.info("engine.cycle_funnel", as_of=now.isoformat(), **_funnel)
+                self.last_cycle_funnel = dict(_funnel)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("engine.cycle_funnel_emit_failed", error=str(exc))
+
+        # Revisit sweep (unfreeze Stage 3): recycle unexecuted FINAL_DECIDED
+        # ideas (≥ min-age, horizon unexpired, no live/filled order) into fresh
+        # ideas that enter THIS cycle — the standing book keeps quiet days
+        # alive instead of dying at the no-signals bail-out below.  Fail-safe:
+        # a sweep error logs and never aborts the cycle.
+        revived: list[Idea] = []
+        try:
+            revived = outcome_runner.run_revisit_sweep(
+                self.conn,
+                clock=self.clock,
+                min_age_hours=getattr(self.config, "idea_revisit_min_age_hours", 24.0),
+                limit=getattr(self.config, "idea_revisit_limit", 50),
+                audit_path=self.config.audit_path,
+            )
+            if revived:
+                log.info(
+                    "engine.run_cycle.revisit_revived",
+                    count=len(revived),
+                    as_of=now.isoformat(),
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.error("engine.run_cycle.revisit_sweep_failed", error=str(exc))
+
         # A3 (news) — gather corroborated free-news opinions up front so they can
         # spawn their OWN short-horizon ideas (A3 has no filing in detect_signals,
         # so without this it could never trade or earn trust).  Self-gating in
@@ -592,6 +665,9 @@ class Engine:
             catalyst: set[str] = set(held_tickers)
             catalyst.update(s.ticker for s in signals)
             catalyst.update(i.ticker for i in active_ideas)
+            # Revisited tickers get a FRESH A3 look — re-fusing against stale
+            # opinions alone would just re-decide the same dead end.
+            catalyst.update(r.ticker for r in revived)
             log.info(
                 "engine.a3.catalyst_gate",
                 n_catalyst=len(catalyst),
@@ -605,8 +681,15 @@ class Engine:
         # adapters.a5: [] when the robotics_advisor_enabled kill-switch is OFF
         # (default) and under a BacktestClock; never raises.
         a5_opinions = self._gather_a5_opinions()
-        if not signals and not a3_opinions and not a4_opinions and not a5_opinions:
+        if (
+            not signals
+            and not a3_opinions
+            and not a4_opinions
+            and not a5_opinions
+            and not revived
+        ):
             log.info("engine.run_cycle.no_signals", as_of=now.isoformat())
+            _emit_funnel(None)
             return CycleResult(ideas_processed=0)
 
         # Build one Idea per distinct (ticker, source) combination (MVP heuristic).
@@ -642,6 +725,18 @@ class Engine:
                 as_of=now,
             )
             ideas.append(idea)
+
+        # Merge revived (revisit-sweep) ideas into this cycle — same held/dedupe
+        # guards as fresh signal ideas.  A fresh signal for the same ticker wins
+        # (it carries newer information); the revived duplicate is simply dropped
+        # (its old idea is already ABANDONED, so the slot re-fills next sweep).
+        for r_idea in revived:
+            if r_idea.ticker in seen_tickers:
+                continue
+            if r_idea.ticker in held_tickers and not _addon_ok(r_idea.ticker):
+                continue
+            seen_tickers.add(r_idea.ticker)
+            ideas.append(r_idea)
 
         # A3 (news) idea-spawning: build a SHORT-horizon idea per corroborated
         # news ticker we don't already hold / haven't built this cycle, then
@@ -697,6 +792,7 @@ class Engine:
             live_advisor_count += 1
 
         if not ideas:
+            _emit_funnel(None)
             return CycleResult(ideas_processed=0)
 
         # ------------------------------------------------------------------
@@ -744,6 +840,8 @@ class Engine:
                 as_of=now.isoformat(),
                 total_advisors=len(advisor_ids),
             )
+            _funnel["ideas"] = len(ideas)
+            _emit_funnel(None)
             return CycleResult(ideas_processed=len(ideas), opinions_gathered=len(advisor_ids), opinions_null=len(advisor_ids))
 
         def _bound_fuse(opinions: list[Opinion], bucket: HorizonBucket) -> FusionOutput:
@@ -799,6 +897,7 @@ class Engine:
                 config=self.config,
                 portfolio_equity=_equity_usd,
                 live_advisor_count=live_advisor_count,  # actual live count this cycle
+                trace=_trace,  # decision-funnel tracing (unfreeze Stage 1)
                 **_book[0].as_decide_kwargs(idea.ticker),  # A2: book-aware caps bind
             )
             return orders[0] if orders else None
@@ -1047,7 +1146,11 @@ class Engine:
             on_new_idea=_on_new_idea,
             on_transition=_on_transition,
             express=_bound_express if _options_on else None,
+            trace=_trace,  # decision-funnel tracing (unfreeze Stage 1)
         )
+
+        # Decision funnel summary — one greppable event per cycle.
+        _emit_funnel(result)
 
         # If a broker-fatal event occurred during the cycle, mark the result.
         if _broker_fatal and self.paused:

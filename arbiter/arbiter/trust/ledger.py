@@ -51,6 +51,7 @@ from arbiter.contract.seams import (
     WeightBundle,
 )
 from arbiter.trust.brier import brier_skill_score, _decay_weight, HALF_LIFE_DAYS
+from arbiter.trust.weight_resolver import PAROLE_REASON
 from arbiter.trust.coverage import coverage_score
 from arbiter.trust.correlation_matrix import CorrelationMatrix
 from arbiter.trust.regime import RegimeTracker, apply_regime_weights
@@ -564,8 +565,23 @@ class TrustLedger:
             # significance-gated (symmetric with graduation): mute ONLY when the
             # skill CI upper bound is below zero AND effective-n is sufficient,
             # never on a thin/insignificant negative point estimate.
+            #
+            # Unfreeze Stage 2 (parole): the HARD mute additionally requires a
+            # full SHADOW_THRESHOLD sample of non-abstain outcomes.  A
+            # significantly-negative advisor below that sample gets "parole"
+            # instead — the resolver floors it at a REDUCED weight so it keeps
+            # trading small and keeps accruing the outcomes that would either
+            # rehabilitate it or confirm the mute.  Benching on a thin sample
+            # starves the learning loop of exactly the data it needs.
             is_negative_skill = is_significant_negative_skill(skill_ci_high, n_eff)
-            cap_reasons[advisor_id] = "negative_skill" if is_negative_skill else None
+            n_non_abstain_pre = sum(1 for o in outcomes if not o.abstained)
+            mute = is_negative_skill and n_non_abstain_pre >= SHADOW_THRESHOLD
+            if mute:
+                cap_reasons[advisor_id] = "negative_skill"
+            elif is_negative_skill:
+                cap_reasons[advisor_id] = PAROLE_REASON
+            else:
+                cap_reasons[advisor_id] = None
 
             composite = compute_composite_trust(
                 outcomes,
@@ -603,11 +619,14 @@ class TrustLedger:
 
             # Caps/floors — pass is_shadow so thin-sample floor doesn't override
             # shadow zero; pass effective-n so the floor is reachable (E1).
+            # Parole advisors are NOT hard-zeroed here — only the full-sample
+            # mute is.  (Their ramp weight is 0/shadow anyway below the count
+            # threshold; the resolver applies the reduced parole floor.)
             final_weight, shadow_from_neg = _apply_caps(
                 advisor_id,
                 ramped_weight,
                 len(outcomes),
-                is_negative_skill,
+                mute,
                 is_shadow=shadow_from_ramp,
                 effective_n=n_eff,
             )

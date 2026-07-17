@@ -473,3 +473,197 @@ class TestNaNAdv:
             as_of=_as_of(),
         )
         assert size == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Trace callback (unfreeze Stage 1 — decision tracing)
+# ---------------------------------------------------------------------------
+
+def _collect():
+    """Return (events, trace) — trace appends (event, payload) tuples."""
+    events: list[tuple[str, dict]] = []
+
+    def trace(event: str, payload: dict) -> None:
+        events.append((event, payload))
+
+    return events, trace
+
+
+class TestSizingTrace:
+    """compute_size(trace=...) reports WHY a size came back 0."""
+
+    def test_adv_missing_traced(self, cfg):
+        events, trace = _collect()
+        size = compute_size(
+            fusion=make_fusion(conviction=0.5),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_normal_decision(),
+            adv_provider=adv_missing(),
+            ticker="NOADV",
+            as_of=_as_of(),
+            trace=trace,
+        )
+        assert size == 0.0
+        assert ("size", {"reason": "adv_missing", "ticker": "NOADV"}) in events
+
+    def test_position_count_full_traced(self, cfg):
+        events, trace = _collect()
+        size = compute_size(
+            fusion=make_fusion(conviction=0.5),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="FULL",
+            as_of=_as_of(),
+            current_open_positions=cfg.max_open_positions,
+            trace=trace,
+        )
+        assert size == 0.0
+        assert ("size", {"reason": "position_count_full", "ticker": "FULL"}) in events
+
+    def test_caps_exhausted_traced(self, cfg):
+        """Zero gross headroom clamps size to 0 → caps_exhausted."""
+        events, trace = _collect()
+        size = compute_size(
+            fusion=make_fusion(conviction=0.5),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="NOROOM",
+            as_of=_as_of(),
+            current_gross_exposure=cfg.max_gross_pct * PORTFOLIO,
+            trace=trace,
+        )
+        assert size == 0.0
+        assert ("size", {"reason": "caps_exhausted", "ticker": "NOROOM"}) in events
+
+    def test_gate_blocked_traced(self, cfg):
+        events, trace = _collect()
+        size = compute_size(
+            fusion=make_fusion(conviction=0.5),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_halted_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="HALT",
+            as_of=_as_of(),
+            trace=trace,
+        )
+        assert size == 0.0
+        assert ("size", {"reason": "gate_blocked", "ticker": "HALT"}) in events
+
+    def test_no_trace_kwarg_unchanged(self, cfg):
+        """Default trace=None keeps legacy behavior (no error, same size)."""
+        size = compute_size(
+            fusion=make_fusion(conviction=0.5, cold_start=False),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="PLAIN",
+            as_of=_as_of(),
+        )
+        assert size > 0.0
+
+    def test_raising_trace_never_breaks_sizing(self, cfg):
+        """A broken trace callback must not abort sizing (fail-safe)."""
+        def bad_trace(event: str, payload: dict) -> None:
+            raise RuntimeError("boom")
+
+        size = compute_size(
+            fusion=make_fusion(conviction=0.5),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_normal_decision(),
+            adv_provider=adv_missing(),
+            ticker="BOOM",
+            as_of=_as_of(),
+            trace=bad_trace,
+        )
+        assert size == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Minimum position size floor (unfreeze Stage 4 — deployment pressure)
+# ---------------------------------------------------------------------------
+
+class TestMinPositionFloor:
+    """Conviction-qualified floor: a trade that clears the bar is worth at
+    least min_position_pct × equity — but the floor never breaches a cap."""
+
+    def _cfg_with_floor(self, cfg, pct):
+        import dataclasses
+        return dataclasses.replace(cfg, min_position_pct=pct)
+
+    def test_floor_raises_small_size(self, cfg):
+        """conviction 0.05 → raw $1250 on $100k; floor 2% → $2000."""
+        size = compute_size(
+            fusion=make_fusion(conviction=0.05, cold_start=False),
+            portfolio_equity=PORTFOLIO,
+            config=self._cfg_with_floor(cfg, 0.02),
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="FLOOR",
+            as_of=_as_of(),
+        )
+        assert size == pytest.approx(0.02 * PORTFOLIO)
+
+    def test_floor_clamped_by_name_headroom(self, cfg):
+        """Floor never breaches the per-name cap headroom."""
+        headroom_target = 1_500.0  # name cap 5% of 100k = 5000; held 3500
+        size = compute_size(
+            fusion=make_fusion(conviction=0.05, cold_start=False),
+            portfolio_equity=PORTFOLIO,
+            config=self._cfg_with_floor(cfg, 0.02),
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="CLAMP",
+            as_of=_as_of(),
+            current_name_exposure=cfg.max_position_pct * PORTFOLIO - headroom_target,
+        )
+        assert size == pytest.approx(headroom_target)
+
+    def test_zero_floor_is_legacy_behavior(self, cfg):
+        """min_position_pct=0 (the bare-Config default) → exact legacy size."""
+        size = compute_size(
+            fusion=make_fusion(conviction=0.05, cold_start=False),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="LEGACY",
+            as_of=_as_of(),
+        )
+        assert size == pytest.approx(0.25 * 0.05 * PORTFOLIO)  # $1250
+
+    def test_adv_cap_still_binds_after_floor(self, cfg):
+        """ADV cap is the LAST transform — floor cannot bypass it."""
+        adv = 10_000.0  # adv cap = 2% × 10k = $200 < $2000 floor
+        size = compute_size(
+            fusion=make_fusion(conviction=0.05, cold_start=False),
+            portfolio_equity=PORTFOLIO,
+            config=self._cfg_with_floor(cfg, 0.02),
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(adv),
+            ticker="ADVCAP",
+            as_of=_as_of(),
+        )
+        assert size == pytest.approx(0.02 * adv)
+
+    def test_floor_does_not_resurrect_zero_size(self, cfg):
+        """A size already clamped to 0 by caps stays 0 — the floor only lifts
+        LIVE (positive) sizes, it never creates a trade the caps rejected."""
+        size = compute_size(
+            fusion=make_fusion(conviction=0.05, cold_start=False),
+            portfolio_equity=PORTFOLIO,
+            config=self._cfg_with_floor(cfg, 0.02),
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="DEAD",
+            as_of=_as_of(),
+            current_gross_exposure=cfg.max_gross_pct * PORTFOLIO,
+        )
+        assert size == 0.0

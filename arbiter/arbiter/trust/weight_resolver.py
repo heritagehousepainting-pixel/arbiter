@@ -66,6 +66,12 @@ EQUAL_FLOOR_GRADUATED: float = 0.02
 # cap_reason value the ledger persists for sub-chance (negative-skill) advisors.
 NEGATIVE_SKILL_REASON: str = "negative_skill"
 
+# cap_reason for a significantly-negative advisor whose sample is still below
+# the SHADOW_THRESHOLD mute bar (unfreeze Stage 2).  Resolved to a REDUCED
+# probationary floor (equal_floor × parole_fraction) instead of a hard mute so
+# the advisor keeps trading small and keeps accruing outcomes.
+PAROLE_REASON: str = "parole"
+
 
 def resolve_weight_bundle(
     ledger_output: WeightBundle | None,
@@ -76,6 +82,7 @@ def resolve_weight_bundle(
     news_advisor_id: str | None = None,
     news_multiplier: float = 1.0,
     news_cap: float = 1.0,
+    parole_fraction: float = 0.5,
 ) -> WeightBundle:
     """Build the live ``WeightBundle`` handed to ``fuse``.
 
@@ -117,6 +124,20 @@ def resolve_weight_bundle(
                 ci_low=0.0,
                 ci_high=0.0,
                 shadow=True,
+            )
+            continue
+
+        if reason == PAROLE_REASON:
+            # Significantly negative but thin sample (unfreeze Stage 2): trade
+            # at a REDUCED floor, non-shadow, so it keeps accruing outcomes
+            # that either rehabilitate it or confirm the full-sample mute.
+            w = equal_floor * parole_fraction
+            resolved[advisor_id] = AdvisorWeight(
+                advisor_id=advisor_id,
+                weight=w,
+                ci_low=w,
+                ci_high=w,
+                shadow=False,
             )
             continue
 
