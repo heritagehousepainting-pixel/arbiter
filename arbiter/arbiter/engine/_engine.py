@@ -626,6 +626,29 @@ class Engine:
             except Exception as exc:  # noqa: BLE001
                 log.warning("engine.cycle_funnel_emit_failed", error=str(exc))
 
+        # Revisit sweep (unfreeze Stage 3): recycle unexecuted FINAL_DECIDED
+        # ideas (≥ min-age, horizon unexpired, no live/filled order) into fresh
+        # ideas that enter THIS cycle — the standing book keeps quiet days
+        # alive instead of dying at the no-signals bail-out below.  Fail-safe:
+        # a sweep error logs and never aborts the cycle.
+        revived: list[Idea] = []
+        try:
+            revived = outcome_runner.run_revisit_sweep(
+                self.conn,
+                clock=self.clock,
+                min_age_hours=getattr(self.config, "idea_revisit_min_age_hours", 24.0),
+                limit=getattr(self.config, "idea_revisit_limit", 50),
+                audit_path=self.config.audit_path,
+            )
+            if revived:
+                log.info(
+                    "engine.run_cycle.revisit_revived",
+                    count=len(revived),
+                    as_of=now.isoformat(),
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.error("engine.run_cycle.revisit_sweep_failed", error=str(exc))
+
         # A3 (news) — gather corroborated free-news opinions up front so they can
         # spawn their OWN short-horizon ideas (A3 has no filing in detect_signals,
         # so without this it could never trade or earn trust).  Self-gating in
@@ -642,6 +665,9 @@ class Engine:
             catalyst: set[str] = set(held_tickers)
             catalyst.update(s.ticker for s in signals)
             catalyst.update(i.ticker for i in active_ideas)
+            # Revisited tickers get a FRESH A3 look — re-fusing against stale
+            # opinions alone would just re-decide the same dead end.
+            catalyst.update(r.ticker for r in revived)
             log.info(
                 "engine.a3.catalyst_gate",
                 n_catalyst=len(catalyst),
@@ -655,7 +681,13 @@ class Engine:
         # adapters.a5: [] when the robotics_advisor_enabled kill-switch is OFF
         # (default) and under a BacktestClock; never raises.
         a5_opinions = self._gather_a5_opinions()
-        if not signals and not a3_opinions and not a4_opinions and not a5_opinions:
+        if (
+            not signals
+            and not a3_opinions
+            and not a4_opinions
+            and not a5_opinions
+            and not revived
+        ):
             log.info("engine.run_cycle.no_signals", as_of=now.isoformat())
             _emit_funnel(None)
             return CycleResult(ideas_processed=0)
@@ -693,6 +725,18 @@ class Engine:
                 as_of=now,
             )
             ideas.append(idea)
+
+        # Merge revived (revisit-sweep) ideas into this cycle — same held/dedupe
+        # guards as fresh signal ideas.  A fresh signal for the same ticker wins
+        # (it carries newer information); the revived duplicate is simply dropped
+        # (its old idea is already ABANDONED, so the slot re-fills next sweep).
+        for r_idea in revived:
+            if r_idea.ticker in seen_tickers:
+                continue
+            if r_idea.ticker in held_tickers and not _addon_ok(r_idea.ticker):
+                continue
+            seen_tickers.add(r_idea.ticker)
+            ideas.append(r_idea)
 
         # A3 (news) idea-spawning: build a SHORT-horizon idea per corroborated
         # news ticker we don't already hold / haven't built this cycle, then

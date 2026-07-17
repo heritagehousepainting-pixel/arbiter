@@ -214,6 +214,14 @@ class Config:
     # Defaulted so existing direct ``Config(...)`` constructions need no change.
     dedupe_cooldown_days: int = 3
 
+    # Revisit sweep (unfreeze Stage 3): unexecuted FINAL_DECIDED ideas are
+    # recycled into fresh ideas once per day (min-age) so the backlog re-fuses
+    # against fresh opinions instead of dying one-shot.  ``limit`` bounds the
+    # follow-on A3/Finnhub load per cycle; <= 0 disables.  Defaulted so
+    # existing direct ``Config(...)`` constructions need no change.
+    idea_revisit_limit: int = 50
+    idea_revisit_min_age_hours: float = 24.0
+
     # Stuck pre-execution sweep (2026-07-10 deadlock fix): a GATHERING or
     # PROVISIONAL_DECIDED idea stranded by a PRIOR cycle (a mid-cycle broker-fatal
     # auto-pause landed before decide) blocks its (ticker,bucket) dedupe slot
@@ -539,6 +547,10 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         dedupe_cooldown_days=_env_int("ARBITER_DEDUPE_COOLDOWN_DAYS", 3),
         stuck_idea_max_age_hours=_env_float("ARBITER_STUCK_IDEA_MAX_AGE_HOURS", 2.0),
+        idea_revisit_limit=_env_int("ARBITER_IDEA_REVISIT_LIMIT", 50),
+        idea_revisit_min_age_hours=_env_float(
+            "ARBITER_IDEA_REVISIT_MIN_AGE_HOURS", 24.0
+        ),
         alpaca_api_key=_env_str("ALPACA_API_KEY", str(alpaca.get("api_key", ""))),
         alpaca_secret_key=_env_str("ALPACA_SECRET_KEY", str(alpaca.get("secret_key", ""))),
         alpaca_paper_base_url=alpaca_paper_base_url,

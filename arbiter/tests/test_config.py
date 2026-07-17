@@ -317,3 +317,19 @@ class TestTrustParoleFraction:
         monkeypatch.setenv("ARBITER_TRUST_PAROLE_FRACTION", "0.3")
         cfg = load_config()
         assert cfg.trust_parole_fraction == 0.3
+
+
+class TestIdeaRevisitKnobs:
+    """Unfreeze Stage 3 config knobs."""
+
+    def test_defaults(self):
+        cfg = load_config()
+        assert cfg.idea_revisit_limit == 50
+        assert cfg.idea_revisit_min_age_hours == 24.0
+
+    def test_env_overrides(self, monkeypatch):
+        monkeypatch.setenv("ARBITER_IDEA_REVISIT_LIMIT", "10")
+        monkeypatch.setenv("ARBITER_IDEA_REVISIT_MIN_AGE_HOURS", "12")
+        cfg = load_config()
+        assert cfg.idea_revisit_limit == 10
+        assert cfg.idea_revisit_min_age_hours == 12.0
