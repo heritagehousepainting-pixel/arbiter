@@ -860,3 +860,44 @@ def test_is_significant_negative_skill():
     assert is_significant_negative_skill(-0.10, MIN_EFFECTIVE_N - 1) is False
     # None CI -> do NOT mute.
     assert is_significant_negative_skill(None, MIN_EFFECTIVE_N) is False
+
+
+class TestParoleThinSampleNegativeSkill:
+    """Unfreeze Stage 2: a significantly-NEGATIVE advisor below the
+    SHADOW_THRESHOLD sample gets cap_reason='parole' (reduced floor, keeps
+    trading small) instead of the hard 'negative_skill' mute.  The full-sample
+    mute is unchanged."""
+
+    def test_thin_sample_negative_gets_parole(self):
+        # n in [MIN_EFFECTIVE_N, SHADOW_THRESHOLD): significance gate passes
+        # (n_eff >= 20) but the sample is below the 30-outcome mute bar.
+        n = SHADOW_THRESHOLD - 5  # 25
+        wrong = _build_advisor_data(
+            "A1.thin", n=n, confidence=0.8, binary=-1, stance_score=0.9,
+        )
+        ledger = TrustLedger()
+        bundle = ledger.update(
+            {"A1.thin": wrong},
+            eligible_by_advisor={"A1.thin": [f"idea-{i}" for i in range(n)]},
+            as_of=AS_OF,
+            force=True,
+        )
+        assert bundle is not None
+        assert ledger.last_cap_reasons.get("A1.thin") == "parole"
+
+    def test_full_sample_negative_still_hard_muted(self):
+        n = PHASE3_ACTIVATION_THRESHOLD  # >= SHADOW_THRESHOLD
+        wrong = _build_advisor_data(
+            "A1.bad2", n=n, confidence=0.8, binary=-1, stance_score=0.9,
+        )
+        ledger = TrustLedger()
+        bundle = ledger.update(
+            {"A1.bad2": wrong},
+            eligible_by_advisor={"A1.bad2": [f"idea-{i}" for i in range(n)]},
+            as_of=AS_OF,
+            force=True,
+        )
+        assert bundle is not None
+        assert ledger.last_cap_reasons.get("A1.bad2") == "negative_skill"
+        assert bundle.weights["A1.bad2"].weight == 0.0
+        assert bundle.weights["A1.bad2"].shadow is True

@@ -66,6 +66,12 @@ EQUAL_FLOOR_GRADUATED: float = 0.02
 # cap_reason value the ledger persists for sub-chance (negative-skill) advisors.
 NEGATIVE_SKILL_REASON: str = "negative_skill"
 
+# cap_reason for a significantly-negative advisor whose sample is still below
+# the SHADOW_THRESHOLD mute bar (unfreeze Stage 2).  Resolved to a REDUCED
+# probationary floor (equal_floor × parole_fraction) instead of a hard mute so
+# the advisor keeps trading small and keeps accruing outcomes.
+PAROLE_REASON: str = "parole"
+
 
 def resolve_weight_bundle(
     ledger_output: WeightBundle | None,
