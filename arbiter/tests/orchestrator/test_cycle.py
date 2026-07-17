@@ -339,3 +339,41 @@ class TestCycleResultStats:
         assert result.ideas_processed == 0
         assert result.orders_submitted == 0
         assert result.opinions_gathered == 0
+
+
+# ---------------------------------------------------------------------------
+# Trace callback + no-opinions funnel counter (unfreeze Stage 1)
+# ---------------------------------------------------------------------------
+
+class TestCycleTrace:
+    def test_no_opinions_traced_and_counted(self):
+        """An idea whose bucket has no opinions is traced + counted."""
+        events: list[tuple[str, dict]] = []
+
+        def trace(event: str, payload: dict) -> None:
+            events.append((event, payload))
+
+        idea = _make_idea()
+        advisor_map = {}  # no advisors → no opinions at all
+        fuse = lambda opinions, bucket: _fusion_output(bucket)
+        decide = lambda fusion, idea: None
+        submit = lambda order: True
+
+        result = run_cycle([idea], advisor_map, fuse, decide, submit, _clock(), trace=trace)
+
+        assert result.ideas_no_opinions == 1
+        cycle_events = [p for (e, p) in events if e == "cycle"]
+        assert any(
+            p["reason"] == "no_opinions" and p["ticker"] == "AAPL" for p in cycle_events
+        )
+
+    def test_raising_trace_never_breaks_cycle(self):
+        def bad_trace(event: str, payload: dict) -> None:
+            raise RuntimeError("boom")
+
+        idea = _make_idea()
+        result = run_cycle(
+            [idea], {}, lambda o, b: _fusion_output(b),
+            lambda f, i: None, lambda o: True, _clock(), trace=bad_trace,
+        )
+        assert result.ideas_no_opinions == 1
