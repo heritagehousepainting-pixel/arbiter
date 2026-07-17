@@ -473,3 +473,114 @@ class TestNaNAdv:
             as_of=_as_of(),
         )
         assert size == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Trace callback (unfreeze Stage 1 — decision tracing)
+# ---------------------------------------------------------------------------
+
+def _collect():
+    """Return (events, trace) — trace appends (event, payload) tuples."""
+    events: list[tuple[str, dict]] = []
+
+    def trace(event: str, payload: dict) -> None:
+        events.append((event, payload))
+
+    return events, trace
+
+
+class TestSizingTrace:
+    """compute_size(trace=...) reports WHY a size came back 0."""
+
+    def test_adv_missing_traced(self, cfg):
+        events, trace = _collect()
+        size = compute_size(
+            fusion=make_fusion(conviction=0.5),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_normal_decision(),
+            adv_provider=adv_missing(),
+            ticker="NOADV",
+            as_of=_as_of(),
+            trace=trace,
+        )
+        assert size == 0.0
+        assert ("size", {"reason": "adv_missing", "ticker": "NOADV"}) in events
+
+    def test_position_count_full_traced(self, cfg):
+        events, trace = _collect()
+        size = compute_size(
+            fusion=make_fusion(conviction=0.5),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="FULL",
+            as_of=_as_of(),
+            current_open_positions=cfg.max_open_positions,
+            trace=trace,
+        )
+        assert size == 0.0
+        assert ("size", {"reason": "position_count_full", "ticker": "FULL"}) in events
+
+    def test_caps_exhausted_traced(self, cfg):
+        """Zero gross headroom clamps size to 0 → caps_exhausted."""
+        events, trace = _collect()
+        size = compute_size(
+            fusion=make_fusion(conviction=0.5),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="NOROOM",
+            as_of=_as_of(),
+            current_gross_exposure=cfg.max_gross_pct * PORTFOLIO,
+            trace=trace,
+        )
+        assert size == 0.0
+        assert ("size", {"reason": "caps_exhausted", "ticker": "NOROOM"}) in events
+
+    def test_gate_blocked_traced(self, cfg):
+        events, trace = _collect()
+        size = compute_size(
+            fusion=make_fusion(conviction=0.5),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_halted_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="HALT",
+            as_of=_as_of(),
+            trace=trace,
+        )
+        assert size == 0.0
+        assert ("size", {"reason": "gate_blocked", "ticker": "HALT"}) in events
+
+    def test_no_trace_kwarg_unchanged(self, cfg):
+        """Default trace=None keeps legacy behavior (no error, same size)."""
+        size = compute_size(
+            fusion=make_fusion(conviction=0.5, cold_start=False),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_normal_decision(),
+            adv_provider=adv_always(1e9),
+            ticker="PLAIN",
+            as_of=_as_of(),
+        )
+        assert size > 0.0
+
+    def test_raising_trace_never_breaks_sizing(self, cfg):
+        """A broken trace callback must not abort sizing (fail-safe)."""
+        def bad_trace(event: str, payload: dict) -> None:
+            raise RuntimeError("boom")
+
+        size = compute_size(
+            fusion=make_fusion(conviction=0.5),
+            portfolio_equity=PORTFOLIO,
+            config=cfg,
+            gate_decision=_normal_decision(),
+            adv_provider=adv_missing(),
+            ticker="BOOM",
+            as_of=_as_of(),
+            trace=bad_trace,
+        )
+        assert size == 0.0
