@@ -95,3 +95,21 @@ def test_zero_equity_guard_no_crash_no_count():
     _run_post_close_sweep(eng, _NOW, state)
     assert state.idle_sessions == 0
     assert eng.alerting.calls == []
+
+
+def test_threshold_config_override():
+    """A config-driven threshold (two-working-books) governs the idle test:
+    60% deployed is idle under a 0.75 threshold but fine under 0.50."""
+    eng = _FakeEngine(cash=4_000.0, equity=10_000.0)  # 60% deployed
+    eng.config.idle_deployment_threshold = 0.75
+    state = DaemonState()
+    for _ in range(3):
+        _run_post_close_sweep(eng, _NOW, state)
+    assert len(eng.alerting.calls) == 1  # 60% < 75% → idle → fires
+
+    eng2 = _FakeEngine(cash=4_000.0, equity=10_000.0)
+    eng2.config.idle_deployment_threshold = 0.50
+    state2 = DaemonState()
+    for _ in range(3):
+        _run_post_close_sweep(eng2, _NOW, state2)
+    assert eng2.alerting.calls == []  # 60% >= 50% → deployed → never fires

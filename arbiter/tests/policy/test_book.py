@@ -142,3 +142,50 @@ def test_feeds_decide_params() -> None:
     assert isinstance(kwargs["current_gross_exposure"], float)
     assert isinstance(kwargs["current_sector_exposure"], float)
     assert isinstance(kwargs["current_name_exposure"], float)
+
+
+# ---------------------------------------------------------------------------
+# Option overlay (two-working-books, 2026-07-20): options are a SEPARATE
+# budget.  Delta-notional guards the per-name cap ONLY (cross-book
+# anti-doubling); it never counts toward equity gross/sector/open-count.
+# ---------------------------------------------------------------------------
+
+class TestOptionOverlay:
+    def _sector_for(self, ticker):
+        return "TECH"
+
+    def test_overlay_counts_in_name_exposure_only(self):
+        book = RiskBook(
+            held={"AAPL": 500.0},
+            sector_for=self._sector_for,
+            option_overlay={"UBER": 5733.0},
+        )
+        assert book.name_exposure_for("UBER") == 5733.0
+        assert book.name_exposure_for("AAPL") == 500.0
+        assert book.gross_exposure() == 500.0          # equity-only
+        assert book.sector_exposure_for("UBER") == 500.0  # same fake sector; option absent
+        assert book.open_positions() == 1               # equity positions only
+
+    def test_overlay_stacks_with_equity_on_same_name(self):
+        book = RiskBook(
+            held={"UBER": 300.0},
+            sector_for=self._sector_for,
+            option_overlay={"UBER": 5733.0},
+        )
+        assert book.name_exposure_for("UBER") == 6033.0
+        assert book.gross_exposure() == 300.0
+
+    def test_add_preserves_overlay(self):
+        book = RiskBook(
+            held={}, sector_for=self._sector_for, option_overlay={"UBER": 100.0}
+        )
+        book2 = book.add("MSFT", 250.0)
+        assert book2.name_exposure_for("UBER") == 100.0
+        assert book2.gross_exposure() == 250.0
+
+    def test_add_option_delta_goes_to_overlay_not_gross(self):
+        book = RiskBook(held={"AAPL": 500.0}, sector_for=self._sector_for)
+        book2 = book.add_option_delta("UBER", 5733.0)
+        assert book2.name_exposure_for("UBER") == 5733.0
+        assert book2.gross_exposure() == 500.0
+        assert book2.open_positions() == 1

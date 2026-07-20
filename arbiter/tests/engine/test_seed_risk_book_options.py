@@ -65,14 +65,17 @@ def _seed_option(conn, *, underlying="UBER", delta=0.7508, qty=1,
     return idea_id, occ
 
 
-def test_open_option_folds_delta_notional_under_underlying(tmp_path):
+def test_open_option_folds_delta_notional_into_name_overlay_only(tmp_path):
+    """Two-working-books (2026-07-20): an open option guards the PER-NAME cap
+    for its underlying (cross-book anti-doubling) but no longer counts toward
+    the equity gross budget — a standing LEAPS cannot freeze the stock book."""
     conn = _conn(tmp_path)
     _seed_option(conn)
     book = seed_risk_book(_engine_stub(conn), _AS_OF)
     expected = 0.7508 * 100 * 1 * 76.355  # ≈ $5,732.73
-    assert book.name_exposure_for("UBER") > 0.0
     assert book.name_exposure_for("UBER") == abs(expected)
-    assert book.gross_exposure() == abs(expected)
+    assert book.gross_exposure() == 0.0  # equity book untouched
+    assert book.open_positions() == 0    # options don't consume equity slots
 
 
 def test_closed_option_does_not_fold(tmp_path):

@@ -214,6 +214,12 @@ class Config:
     # Defaulted so existing direct ``Config(...)`` constructions need no change.
     dedupe_cooldown_days: int = 3
 
+    # Idle-capital alert threshold (two-working-books 2026-07-20): deployment
+    # (1 − cash/equity) below this for 3 consecutive closed sessions fires the
+    # warning ntfy.  0.75 matches the "working money — don't let it sit"
+    # posture.  Defaulted so direct ``Config(...)`` constructions need no change.
+    idle_deployment_threshold: float = 0.75
+
     # Minimum position size floor (unfreeze Stage 4 — deployment pressure): a
     # trade whose conviction cleared the bar is sized at least this fraction
     # of equity, re-clamped by every headroom cap and the ADV cap (the floor
@@ -557,6 +563,9 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         dedupe_cooldown_days=_env_int("ARBITER_DEDUPE_COOLDOWN_DAYS", 3),
         stuck_idea_max_age_hours=_env_float("ARBITER_STUCK_IDEA_MAX_AGE_HOURS", 2.0),
+        idle_deployment_threshold=_env_float(
+            "ARBITER_IDLE_DEPLOYMENT_THRESHOLD", 0.75
+        ),
         idea_revisit_limit=_env_int("ARBITER_IDEA_REVISIT_LIMIT", 50),
         idea_revisit_min_age_hours=_env_float(
             "ARBITER_IDEA_REVISIT_MIN_AGE_HOURS", 24.0
