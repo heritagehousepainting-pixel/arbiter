@@ -346,3 +346,16 @@ class TestMinPositionPct:
         monkeypatch.setenv("ARBITER_MIN_POSITION_PCT", "0.03")
         cfg = load_config()
         assert cfg.min_position_pct == 0.03
+
+
+class TestIdleDeploymentThreshold:
+    """Two-working-books config knob."""
+
+    def test_default(self):
+        cfg = load_config()
+        assert cfg.idle_deployment_threshold == 0.75
+
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("ARBITER_IDLE_DEPLOYMENT_THRESHOLD", "0.6")
+        cfg = load_config()
+        assert cfg.idle_deployment_threshold == 0.6

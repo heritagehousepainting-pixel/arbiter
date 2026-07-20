@@ -52,16 +52,23 @@ class RiskBook:
         Injected so the book has no knowledge of the sector taxonomy.
     """
 
-    __slots__ = ("_held", "_sector_for")
+    __slots__ = ("_held", "_sector_for", "_option_overlay")
 
     def __init__(
         self,
         held: Mapping[str, float],
         sector_for: Callable[[str], str],
+        option_overlay: Mapping[str, float] | None = None,
     ) -> None:
         # Defensive copy → genuine immutability of the per-ticker notional map.
         self._held: Mapping[str, float] = MappingProxyType(dict(held))
         self._sector_for = sector_for
+        # Options are a SEPARATE working book (2026-07-20 two-working-books):
+        # their delta-notional guards the PER-NAME cap only (cross-book
+        # anti-doubling) and never counts toward equity gross/sector/count.
+        self._option_overlay: Mapping[str, float] = MappingProxyType(
+            dict(option_overlay or {})
+        )
 
     # ------------------------------------------------------------------
     # Readers — shaped to feed decide()
@@ -99,7 +106,9 @@ class RiskBook:
         Feeds ``decide(current_name_exposure=...)`` so an add-on to a held
         name sizes against the per-name cap HEADROOM (Tier-2 #5).
         """
-        return float(self._held.get(ticker, 0.0))
+        return float(
+            self._held.get(ticker, 0.0) + self._option_overlay.get(ticker, 0.0)
+        )
 
     def as_decide_kwargs(self, ticker: str) -> dict[str, object]:
         """Exact kwargs for ``decide()`` book-state params for ``ticker``."""
@@ -124,7 +133,11 @@ class RiskBook:
         """
         new_held = dict(self._held)
         new_held[ticker] = new_held.get(ticker, 0.0) + float(notional_usd)
-        return RiskBook(held=new_held, sector_for=self._sector_for)
+        return RiskBook(
+            held=new_held,
+            sector_for=self._sector_for,
+            option_overlay=self._option_overlay,
+        )
 
     def add_option_delta(
         self,
@@ -134,25 +147,23 @@ class RiskBook:
         """Return a NEW book with an option's delta-adjusted notional folded in.
 
         This is the OPTIONS EXPRESSION LAYER's bridge into the equity RiskBook.
-        It folds ``delta_adjusted_notional`` for ``ticker`` into the SAME
-        in-memory book used by equity caps, so that gross/sector caps stay
-        binding even when the premium paid is small.
+        Two-working-books (2026-07-20): options are a SEPARATE budget, so the
+        delta-notional folds into the OPTION OVERLAY — it guards the PER-NAME
+        cap for the underlying (no equity doubling on a name already expressed
+        via options) but does NOT count toward equity gross/sector exposure or
+        the open-position count.  The options book's own spend is bounded by
+        the premium sleeve (``options_sleeve_pct``) in options/sizing.
 
         Formula (caller computes before passing here)::
 
             delta_adjusted_notional = |delta| × 100 × underlying_price × contracts_qty
 
-        A $2k premium on a 0.75-delta call with 10 contracts at $150 underlying
-        gives $112,500 of delta exposure — registering only the $2k premium
-        would silently bypass the gross/sector caps.
-
-        NOTE: This uses the SAME ``_held`` dict as equity positions.  The key is
-        the underlying ticker (not the OCC symbol), so option delta exposure folds
-        into the same sector bucket as the underlying equity.
-
-        STUB STATUS: The method body is intentionally complete (it delegates to
-        ``add()`` since the folding mechanism is identical); no parallel-wave
-        change is needed here.  The parallel wave simply calls this method from
-        ``express.py`` after sizing.
+        The key is the underlying ticker (not the OCC symbol).
         """
-        return self.add(ticker, delta_adjusted_notional)
+        new_overlay = dict(self._option_overlay)
+        new_overlay[ticker] = new_overlay.get(ticker, 0.0) + float(delta_adjusted_notional)
+        return RiskBook(
+            held=dict(self._held),
+            sector_for=self._sector_for,
+            option_overlay=new_overlay,
+        )

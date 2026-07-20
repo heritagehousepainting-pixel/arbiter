@@ -226,6 +226,13 @@ def seed_risk_book(engine: "Engine", now: datetime) -> RiskBook:
     for ticker, snap in positions.items():
         held[ticker] = position_market_value(engine, ticker, snap, now)
 
+    # Two-working-books (2026-07-20): open option positions fold into the
+    # OPTION OVERLAY — a per-name cross-book guard (no equity doubling on a
+    # name already expressed via options).  They no longer count toward the
+    # equity gross/sector budget: the options book is bounded by its OWN
+    # premium sleeve, so a standing LEAPS can never freeze the stock book
+    # (the 2026-07-20 caps_exhausted freeze).
+    overlay: dict[str, float] = {}
     try:
         from arbiter.options import positions as _opt_positions  # noqa: PLC0415
 
@@ -233,13 +240,13 @@ def seed_risk_book(engine: "Engine", now: datetime) -> RiskBook:
             dn = _option_delta_notional(pos)
             if dn > 0.0:
                 und = str(pos["underlying"])
-                held[und] = held.get(und, 0.0) + dn
+                overlay[und] = overlay.get(und, 0.0) + dn
     except Exception as exc:  # noqa: BLE001
         # Fail-open to the equity-only book (the options fold is additive
         # safety; a broken fold must not kill the cycle).
         log.warning("engine.risk_book.options_fold_failed", error=str(exc))
 
-    return RiskBook(held=held, sector_for=sector_for)
+    return RiskBook(held=held, sector_for=sector_for, option_overlay=overlay)
 
 
 def _option_delta_notional(pos: dict) -> float:

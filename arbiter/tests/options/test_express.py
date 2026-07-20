@@ -219,9 +219,13 @@ def test_paper_places_records_position_and_folds_delta():
     ).fetchall()
     assert len(pos) == 1
     assert pos[0]["broker_order_id"] == "brk-1"
-    # No shadow row in paper mode; delta folded into the live book.
+    # No shadow row in paper mode; delta folded into the live book's OPTION
+    # OVERLAY (two-working-books 2026-07-20): per-name guard only, equity
+    # gross budget untouched.
     assert conn.execute("SELECT COUNT(*) FROM option_shadow_log").fetchone()[0] == 0
-    assert book[0].gross_exposure() > 0
+    assert book[0].gross_exposure() == 0.0
+    underlying = pos[0]["occ_symbol"][: len(pos[0]["occ_symbol"]) - 15]
+    assert book[0].name_exposure_for(underlying) > 0
 
 
 def test_paper_place_failure_does_not_open_or_fold():

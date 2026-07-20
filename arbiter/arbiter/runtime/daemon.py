@@ -451,7 +451,9 @@ def _run_full_cycle(engine: Any, ingest_fn: Callable[[], Any] | None, now: datet
     engine.run_cycle(as_of=now)
 
 
-_IDLE_DEPLOYMENT_THRESHOLD = 0.50   # deployment below this counts as an idle session
+# Fallback when the config lacks the knob (two-working-books 2026-07-20:
+# config-driven via ``idle_deployment_threshold`` / ARBITER_IDLE_DEPLOYMENT_THRESHOLD).
+_IDLE_DEPLOYMENT_THRESHOLD = 0.75   # deployment below this counts as an idle session
 _IDLE_SESSIONS_TO_ALERT = 3         # consecutive idle sessions before the phone ping
 
 
@@ -493,7 +495,10 @@ def _run_post_close_sweep(engine: Any, now: datetime, state: "DaemonState | None
             return  # no readable equity — don't count a phantom idle session
         cash = float(getattr(acct, "cash", 0.0) or 0.0)
         deployment = 1.0 - (cash / equity)
-        if deployment >= _IDLE_DEPLOYMENT_THRESHOLD:
+        threshold = float(
+            getattr(engine.config, "idle_deployment_threshold", _IDLE_DEPLOYMENT_THRESHOLD)
+        )
+        if deployment >= threshold:
             state.idle_sessions = 0
             return
         state.idle_sessions += 1
